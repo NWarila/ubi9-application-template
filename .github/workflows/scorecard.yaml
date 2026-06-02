@@ -1,0 +1,24 @@
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "17 6 * * 2"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+concurrency:
+  group: scorecard
+  cancel-in-progress: false
+
+jobs:
+  analysis:
+    permissions:
+      security-events: write
+      id-token: write
+      actions: read
+      contents: read
+    uses: NWarila/.github/.github/workflows/reusable-scorecard.yaml@f662842c3f8add367104315afe8be39f7a2f6953

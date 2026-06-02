@@ -1,0 +1,64 @@
+{
+  "schema_version": "2.0",
+  "image": {
+    "name": "ubi9-application-template-example",
+    "rhel_version": "9",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  },
+  "base": {
+    "builder": "registry.access.redhat.com/ubi9/ubi-minimal@sha256:ae09ecc3d754bc1726cbda3e2599cc7839e09fe1cc547ce173cf669b645be3cc",
+    "runtime": "registry.access.redhat.com/ubi9/ubi-micro@sha256:b498b3ea26111ab4b81d65139f2ebd2ef9a2abb7a4588b7fdcc54889f95e9caa"
+  },
+  "dnf": {
+    "packages": [
+      "ca-certificates"
+    ]
+  },
+  "application": {
+    "source": "go-binary",
+    "binary_path": "/usr/local/bin/app",
+    "artifacts": [
+      {
+        "platform": "linux/amd64",
+        "path": "dist/app-amd64",
+        "sha256": "2d5193c968129cffd5a94fb141099a8a20fb9008ff00f74af0d8829f7c118216"
+      },
+      {
+        "platform": "linux/arm64",
+        "path": "dist/app-arm64",
+        "sha256": "f3dbc0a2cbc2dbb991b6fabf19504f9cabdce42f6fd3a1527e367840fae4b148"
+      }
+    ],
+    "verification": {
+      "type": "none"
+    }
+  },
+  "runtime": {
+    "user": "65532:65532",
+    "entrypoint": [
+      "/usr/local/bin/app"
+    ],
+    "forbidden_executables": [
+      "/bin/sh",
+      "/bin/bash",
+      "/usr/bin/dnf",
+      "/usr/bin/microdnf",
+      "/usr/bin/rpm",
+      "/usr/bin/yum",
+      "/usr/bin/curl",
+      "/usr/bin/wget"
+    ]
+  },
+  "evidence": {
+    "required": [
+      "buildkit-sbom",
+      "buildkit-provenance",
+      "github-artifact-attestation",
+      "cosign-signature",
+      "runtime-hardening"
+    ]
+  }
+}

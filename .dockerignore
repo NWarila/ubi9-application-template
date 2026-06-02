@@ -1,0 +1,6 @@
+# Keep image build context explicit. Downstream source-built images should add
+# only the minimum source paths their builder stage needs.
+*
+
+!dist/
+!dist/**

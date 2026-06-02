@@ -1,0 +1,115 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+
+  // Renovate config for NWarila/ubi9-application-template. Keep Actions
+  // pinned by digest and surface UBI base + Go builder pins for review in downstreams.
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(chore)"
+  ],
+
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+
+  "enabledManagers": [
+    "github-actions",
+    "custom.regex"
+  ],
+
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.*\\.ya?ml$/",
+        "/^docs/.*\\.md$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-zA-Z0-9-._]+?) depName=(?<depName>[^\\s]+?)(?: extractVersion=(?<extractVersion>[^\\s]+?))?(?: versioning=(?<versioning>[^\\s]+?))?\\s+\\w+(?:_VERSION)?:\\s*\"(?<currentValue>[^\"]+)\""
+      ]
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^Makefile$/",
+        "/^tools/build_app\\.sh$/",
+        "/^\\.github/workflows/.*\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?\\s+GO_IMAGE\\s*\\?=\\s*golang:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})",
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?\\s+GO_IMAGE=\"\\$\\{GO_IMAGE:-golang:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\\}\"",
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?\\s+GO_IMAGE:\\s*golang:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})",
+        // reusable-ubi-image-build.yaml carries the canonical default Go
+        // builder pin as a workflow_call input default; match its `default:`
+        // form so Renovate bumps the reusable alongside Makefile/build_app.sh.
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?\\s+default:\\s*\"golang:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ]
+    },
+    {
+      // Track the digest-pinned UBI 9 builder (ubi-minimal) and runtime
+      // (ubi-micro) bases wherever they appear by bare digest reference: the
+      // example app manifests and the canonical image-manifest.json. Red Hat
+      // floating tags are not used at runtime, so currentValue is held at the
+      // sentinel "latest" and Renovate only ever proposes a new digest.
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^examples/.*\\.json$/",
+        "/image-manifest\\.json$/"
+      ],
+      "matchStrings": [
+        "\"(?<depName>registry\\.access\\.redhat\\.com/ubi9/ubi-(?:minimal|micro))@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker",
+      "currentValueTemplate": "latest",
+      "versioningTemplate": "redhat"
+    }
+  ],
+
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "pinDigests": true,
+      "semanticCommitType": "ci",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "matchDepNames": ["actions/checkout"],
+      "groupName": "actions/checkout",
+      "semanticCommitType": "ci",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "matchDepNames": ["actions/setup-python"],
+      "groupName": "actions/setup-python",
+      "semanticCommitType": "ci",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["golang"],
+      "groupName": "golang build image",
+      "semanticCommitType": "deps",
+      "semanticCommitScope": "deps",
+      // The GOFIPS140 validated Go Cryptographic Module v1.0.0 (CMVP #5247)
+      // is selectable in Go 1.24 and 1.25. Go 1.26 introduces a not-yet-
+      // validated v1.26.0 module, so capping below 1.26.0 is the fail-closed
+      // FIPS guard: Renovate must never bump the builder past the last Go
+      // release whose snapshot maps to a validated module.
+      "allowedVersions": "<1.26.0"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchDepNames": [
+        "registry.access.redhat.com/ubi9/ubi-minimal",
+        "registry.access.redhat.com/ubi9/ubi-micro"
+      ],
+      "groupName": "ubi9 base images",
+      "versioning": "redhat",
+      "semanticCommitType": "deps"
+    }
+  ]
+}
