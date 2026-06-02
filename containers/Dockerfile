@@ -33,6 +33,11 @@ ARG DNF_REPOS=""
 # enumerate the installed packages. Deleting it would make scanners report zero
 # packages (a false "0 CVE" result), so this stage NEVER removes
 # /rootfs/var/lib/rpm or /rootfs/var/lib/dnf. Only regenerable cache/logs are pruned.
+# The dependency closure of any RPM also drags the base shell (bash) into an empty
+# installroot; a hardened runtime ships NO shell, so bash (and its /usr/bin/sh
+# symlink) is removed below with rpm -e --noscripts while the rpmdb is preserved,
+# and the stage fails closed if any shell survives. (No '#' comments inside the
+# RUN: a comment line breaks the '\' continuation and silently drops the rest.)
 RUN set -eux; \
     test -n "${DNF_PACKAGES}" || { echo "DNF_PACKAGES must be set" >&2; exit 1; }; \
     mkdir -p /rootfs; \
@@ -47,6 +52,15 @@ RUN set -eux; \
     microdnf clean all; \
     rm -rf /rootfs/var/cache/* /var/cache/microdnf-installroot \
       /rootfs/var/log/dnf.log /rootfs/var/log/dnf.librepo.log /rootfs/var/log/hawkey.log; \
+    if rpm --root=/rootfs -q bash >/dev/null 2>&1; then \
+      rpm --root=/rootfs -e --nodeps --noscripts bash; \
+    fi; \
+    for shell in sh bash dash ash busybox ksh zsh tcsh csh; do \
+      rm -f "/rootfs/usr/bin/${shell}" "/rootfs/usr/sbin/${shell}"; \
+      if [ -e "/rootfs/usr/bin/${shell}" ] || [ -e "/rootfs/usr/sbin/${shell}" ]; then \
+        echo "shell '${shell}' survived in the runtime rootfs" >&2; exit 1; \
+      fi; \
+    done; \
     test -s /rootfs/var/lib/rpm/rpmdb.sqlite || test -s /rootfs/var/lib/rpm/Packages || \
       { echo "rpm database missing from rootfs; scanners would see zero packages" >&2; exit 1; }
 
@@ -98,9 +112,18 @@ LABEL org.opencontainers.image.created="${OCI_CREATED}" \
 
 # The assembled rootfs (including /var/lib/rpm for scanners) and the verified
 # application binary. ubi-micro ships glibc + the CA bundle at
-# /etc/pki/tls/certs/ca-bundle.crt but no shell and no package manager.
+# /etc/pki/tls/certs/ca-bundle.crt and NO package manager -- but it DOES ship
+# bash, and COPY cannot delete a file the base already carries, so the shell is
+# removed in the RUN below (the builder stage already dropped bash from the
+# overlaid rpmdb, so scanners stay consistent).
 COPY --from=rpm-rootfs /rootfs/ /
 COPY --from=application /work/app /usr/local/bin/app
+
+# ubi-micro itself carries /usr/bin/bash (+ the /usr/bin/sh symlink). A hardened
+# runtime must ship no shell, so delete every shell from the final image and fail
+# closed if one survives. This RUN uses the base shell that exists at this point;
+# after it returns, none remain.
+RUN ["/bin/sh", "-c", "for s in sh bash dash ash busybox ksh zsh tcsh csh; do rm -f \"/usr/bin/$s\" \"/usr/sbin/$s\" \"/bin/$s\" \"/sbin/$s\"; done; for s in sh bash dash ash busybox; do if [ -e \"/usr/bin/$s\" ] || [ -e \"/usr/sbin/$s\" ]; then echo \"shell $s survived in runtime image\" >&2; exit 1; fi; done"]
 
 # Derived image repositories that need a named non-root account (rather than a
 # bare numeric UID) synthesize /etc/passwd + /etc/group in the rpm-rootfs stage,

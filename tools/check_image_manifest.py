@@ -21,6 +21,8 @@ DIGEST_PINNED = re.compile(r"^.+@sha256:[a-f0-9]{64}$")
 FORBIDDEN_BASELINE = {
     "/bin/sh",
     "/bin/bash",
+    "/usr/bin/sh",
+    "/usr/bin/bash",
     "/usr/bin/dnf",
     "/usr/bin/microdnf",
     "/usr/bin/rpm",
