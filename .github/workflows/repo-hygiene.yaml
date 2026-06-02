@@ -1,0 +1,31 @@
+name: Repo Hygiene
+
+# Caller for the org-wide reusable-repo-hygiene workflow hosted in
+# NWarila/.github. Evaluates this repo's workflows against the org policy
+# (NWarila/.github policies/opa/repo_hygiene.rego): all workflow `uses:` pinned
+# to a 40-char commit SHA, and pull_request_target boundary safety (no
+# PR-controlled checkout/diff under the privileged token). `source_ref` is
+# pinned to the same SHA as the `uses:` ref so the policy and the workflow stay
+# in lockstep; tools/verify.py enforces that equality.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: repo-hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-hygiene:
+    permissions:
+      contents: read
+    uses: NWarila/.github/.github/workflows/reusable-repo-hygiene.yaml@f662842c3f8add367104315afe8be39f7a2f6953
+    with:
+      source_ref: f662842c3f8add367104315afe8be39f7a2f6953

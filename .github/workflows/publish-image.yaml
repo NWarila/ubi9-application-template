@@ -1,0 +1,318 @@
+name: Publish image
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
+env:
+  MANIFEST: examples/image-manifest.json
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # ComplianceAsCode/content release used to build the DISA RHEL9 STIG datastream.
+  # There is no prebuilt ssg-rhel9-ds.xml shipped for this tag, so the gate builds
+  # it reproducibly from the SHA512-pinned source tarball below.
+  SSG_VERSION: "0.1.81"
+  SSG_TARBALL_SHA512: "11e26cfa96a6f1bd98b3a131837e2f86c9a9851239337d86d624b01627faf10f7a03c395a5839ddab018e0fa47719ade05a9946f90d5ca96b1261776a9164379"
+  # OpenSCAP gate threshold. Fail-closed default: any rule of this severity (or
+  # would-be-stricter) with result "fail" fails the build. The EXACT acceptable
+  # threshold for the DISA STIG profile is an open ADR decision; "high" is the
+  # conservative default until that ADR lands.
+  STIG_FAIL_ON: "high"
+  # Pinned scanner versions. These are binary installs by exact version (NOT a
+  # GitHub Action SHA): the integrator should treat each as a reviewable pin.
+  TRIVY_VERSION: "0.58.1"
+  GRYPE_VERSION: "0.87.0"
+
+jobs:
+  publish:
+    name: publish signed image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: amd64,arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          printf '%s' "${GHCR_TOKEN}" \
+            | docker login "${REGISTRY}" \
+                --username "${REGISTRY_USER}" \
+                --password-stdin
+
+      - name: Build application artifacts
+        run: bash tools/build_app.sh
+
+      - name: Verify application artifact SHAs
+        run: python tools/verify_app_shas.py "${MANIFEST}"
+
+      - name: Generate build arguments
+        run: python tools/generate_build_args.py "${MANIFEST}" > dist/buildargs.txt
+
+      - name: Build and push image with BuildKit attestations
+        id: image
+        run: |
+          # The build args file emitted by generate_build_args.py carries the
+          # --platform linux/amd64,linux/arm64 pair as its first two lines, so
+          # buildx publishes a multi-arch OCI index. Do NOT hardcode --platform
+          # here: the manifest is the single source of truth for the platforms.
+          mapfile -t buildargs < dist/buildargs.txt
+          image="${REGISTRY}/${IMAGE_NAME}"
+          image="${image,,}"
+          ref_tag="$(printf '%s' "${GITHUB_REF_NAME}" \
+            | tr '[:upper:]/' '[:lower:]-' \
+            | tr -cd 'a-z0-9_.-')"
+          if [[ -z "${ref_tag}" ]]; then
+            ref_tag="${GITHUB_SHA}"
+          fi
+
+          docker buildx build \
+            --file containers/Dockerfile \
+            --tag "${image}:${GITHUB_SHA}" \
+            --tag "${image}:${ref_tag}" \
+            --provenance=mode=max \
+            --sbom=true \
+            --metadata-file dist/image-metadata.json \
+            --push \
+            "${buildargs[@]}" \
+            .
+
+          digest="$(python -c 'import json; print(json.load(open("dist/image-metadata.json"))["containerimage.digest"])')"
+          {
+            printf 'image=%s\n' "${image}"
+            printf 'digest=%s\n' "${digest}"
+            printf 'ref=%s@%s\n' "${image}" "${digest}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Generate GitHub artifact attestation
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-name: ${{ steps.image.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Sign image digest with Cosign
+        env:
+          COSIGN_YES: "true"
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: cosign sign --recursive "${IMAGE_REF}"
+
+      - name: Verify GitHub artifact attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: gh attestation verify "oci://${IMAGE_REF}" --repo "${GITHUB_REPOSITORY}"
+
+      - name: Verify Cosign signature
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          cosign verify --recursive "${IMAGE_REF}" \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-image.yaml@refs/(heads/main|tags/v.*)" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+      - name: OpenSCAP DISA RHEL9 STIG evaluation
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          # Build the SCAP datastream reproducibly from the SHA512-pinned SSG
+          # source release: ComplianceAsCode/content v${SSG_VERSION} ships no
+          # prebuilt ssg-rhel9-ds.xml, so generate it with the build toolchain.
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3-jinja2 python3-yaml openscap-utils
+
+          tarball="scap-security-guide-${SSG_VERSION}.tar.bz2"
+          base_url="https://github.com/ComplianceAsCode/content/releases/download/v${SSG_VERSION}"
+          curl -fsSLO "${base_url}/${tarball}"
+          curl -fsSLO "${base_url}/${tarball}.sha512" || true
+
+          # Verify the tarball against the SHA512 pinned in env. The published
+          # .sha512 sidecar is fetched for reference only; the env pin is the
+          # source of truth that gates the build.
+          echo "${SSG_TARBALL_SHA512}  ${tarball}" | sha512sum -c -
+
+          tar xjf "${tarball}"
+          src_dir="scap-security-guide-${SSG_VERSION}"
+          build_dir="${src_dir}/build"
+          mkdir -p "${build_dir}"
+          cmake -S "${src_dir}" -B "${build_dir}" -G Ninja \
+            -DSSG_PRODUCT_DEFAULT=OFF \
+            -DSSG_PRODUCT_RHEL9=ON
+          ninja -C "${build_dir}" generate-ssg-rhel9-ds.xml
+
+          datastream="$(find "${build_dir}" -name 'ssg-rhel9-ds.xml' -print -quit)"
+          if [[ -z "${datastream}" ]]; then
+            echo "failed to locate generated ssg-rhel9-ds.xml under ${build_dir}" >&2
+            exit 1
+          fi
+          echo "using datastream: ${datastream}"
+
+          # oscap returns a nonzero exit when rules fail; capture it and gate
+          # explicitly below rather than letting it abort the step.
+          oscap-podman "${IMAGE_REF}" xccdf eval \
+            --profile xccdf_org.ssgproject.content_profile_stig \
+            --results-arf arf.xml \
+            --report report.html \
+            "${datastream}" || true
+
+          if [[ ! -s arf.xml ]]; then
+            echo "OpenSCAP produced no ARF results (arf.xml missing/empty)" >&2
+            exit 1
+          fi
+
+          # Parse the ARF and fail-closed: any rule at the configured severity
+          # with result "fail" fails the gate. STIG_FAIL_ON is an env knob; the
+          # exact acceptable threshold is an open ADR decision.
+          python - "${STIG_FAIL_ON}" arf.xml <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          fail_on = sys.argv[1].strip().lower()
+          tree = ET.parse(sys.argv[2])
+
+          # rule-result elements live in the XCCDF namespace regardless of the
+          # surrounding ARF/SDS wrapper; match on the local tag to stay robust.
+          def local(tag):
+              return tag.rsplit("}", 1)[-1]
+
+          severity_of = {}
+          results = []
+          for el in tree.iter():
+              if local(el.tag) != "rule-result":
+                  continue
+              severity = (el.get("severity") or "unknown").lower()
+              result = "unknown"
+              for child in el:
+                  if local(child.tag) == "result":
+                      result = (child.text or "unknown").strip().lower()
+                      break
+              results.append((severity, result))
+
+          counts = {"pass": 0, "fail": 0, "notapplicable": 0, "other": 0}
+          for _severity, result in results:
+              if result in counts:
+                  counts[result] += 1
+              else:
+                  counts["other"] += 1
+
+          print(
+              "OpenSCAP STIG results: "
+              f"pass={counts['pass']} fail={counts['fail']} "
+              f"notapplicable={counts['notapplicable']} other={counts['other']}"
+          )
+
+          # Severity ordering used to decide which failing rules gate the build.
+          order = {"low": 1, "medium": 2, "high": 3}
+          threshold = order.get(fail_on, 3)
+          gating = [
+              (sev, res)
+              for sev, res in results
+              if res == "fail" and order.get(sev, 0) >= threshold
+          ]
+          if gating:
+              print(
+                  f"FAIL: {len(gating)} rule(s) at severity >= '{fail_on}' "
+                  "failed the DISA STIG evaluation",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(f"PASS: no failing rules at severity >= '{fail_on}'")
+          PY
+
+      - name: Upload OpenSCAP STIG report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openscap-stig-report
+          path: |
+            report.html
+            arf.xml
+          if-no-files-found: warn
+
+      - name: Trivy vulnerability gate
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          # Install Trivy by pinned version (binary, not a GitHub Action SHA) so
+          # the integrator reviews TRIVY_VERSION as the supply-chain pin.
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          base_url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          curl -fsSLO "${base_url}/${tarball}"
+          curl -fsSLO "${base_url}/trivy_${TRIVY_VERSION}_checksums.txt"
+          grep " ${tarball}\$" "trivy_${TRIVY_VERSION}_checksums.txt" | sha256sum -c -
+          tar xzf "${tarball}" trivy
+          ./trivy --version
+
+          ./trivy image \
+            --vuln-type os,library \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            "${IMAGE_REF}"
+
+      - name: Grype vulnerability gate
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          # Install Grype by pinned version (binary, not a GitHub Action SHA).
+          # --only-fixed restricts the gate to fixable findings, deferring to the
+          # rpmdb (preserved at /var/lib/rpm) so Red Hat VEX/OVAL "will-not-fix"
+          # and not-affected statuses are honored rather than failing on noise.
+          tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          base_url="https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}"
+          curl -fsSLO "${base_url}/${tarball}"
+          curl -fsSLO "${base_url}/grype_${GRYPE_VERSION}_checksums.txt"
+          grep " ${tarball}\$" "grype_${GRYPE_VERSION}_checksums.txt" | sha256sum -c -
+          tar xzf "${tarball}" grype
+          ./grype version
+
+          ./grype "${IMAGE_REF}" --only-fixed --fail-on high
+
+      - name: Test published image hardening
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          exp="$(python -c 'import json;print(json.load(open("examples/image-manifest.json"))["runtime"]["entrypoint"][0])')"
+          bash tests/runtime-hardening.sh "${IMAGE_REF}" "${exp}"
+
+      - name: Verify anonymous public pull
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: bash tools/verify_public_ghcr_pull.sh "${IMAGE_REF}"

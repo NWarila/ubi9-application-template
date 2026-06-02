@@ -1,0 +1,30 @@
+name: Auto-Merge
+
+# Caller for the org-wide reusable-auto-merge workflow hosted in
+# NWarila/.github. Enables GitHub auto-merge on trusted-bot PRs (Renovate and
+# Dependabot) once branch-protection required checks pass; human-authored PRs
+# are never auto-merged. The privileged logic lives in the reviewed central
+# reusable, which runs a read-only authorization job before any write token is
+# used and performs no PR-head checkout. Renovate manages the SHA pin.
+
+on:
+  # zizmor: ignore[dangerous-triggers] The central reusable authorizes the PR
+  # author read-only before any write token is used and performs no PR-head
+  # checkout; see NWarila/.github reusable-auto-merge.yaml.
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: NWarila/.github/.github/workflows/reusable-auto-merge.yaml@f662842c3f8add367104315afe8be39f7a2f6953
