@@ -147,15 +147,24 @@ jobs:
             --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-image.yaml@refs/(heads/main|tags/v.*)" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 
-      - name: OpenSCAP DISA RHEL9 STIG evaluation
+      - name: OpenSCAP DISA RHEL9 STIG scorecard (advisory)
+        # ADVISORY gate (ADR decision): a full-host DISA RHEL9 STIG profile is
+        # structurally inapplicable to a distroless ubi-micro image (no auditd,
+        # sshd, partitions, PAM, kernel params, ...), so its rule results do NOT
+        # block the build. The scorecard (ARF + HTML) is still produced and
+        # uploaded as supply-chain evidence. The hard CVE gates are Trivy + Grype
+        # (0 fixable HIGH/CRITICAL), below. continue-on-error keeps this purely
+        # informational even if the scan tooling hiccups.
+        continue-on-error: true
         env:
           IMAGE_REF: ${{ steps.image.outputs.ref }}
         run: |
           # Build the SCAP datastream reproducibly from the SHA512-pinned SSG
           # source release: ComplianceAsCode/content v${SSG_VERSION} ships no
           # prebuilt ssg-rhel9-ds.xml, so generate it with the build toolchain.
+          # xmllint (libxml2-utils) + xsltproc are required by the SSG cmake build.
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3-jinja2 python3-yaml openscap-utils
+          sudo apt-get install -y cmake ninja-build python3-jinja2 python3-yaml openscap-utils xsltproc libxml2-utils
 
           tarball="scap-security-guide-${SSG_VERSION}.tar.bz2"
           base_url="https://github.com/ComplianceAsCode/content/releases/download/v${SSG_VERSION}"
@@ -237,23 +246,25 @@ jobs:
               f"notapplicable={counts['notapplicable']} other={counts['other']}"
           )
 
-          # Severity ordering used to decide which failing rules gate the build.
+          # ADVISORY: report how many rules failed at/above the reference
+          # severity for the scorecard, but DO NOT fail the build -- a host STIG
+          # profile is not applicable to a distroless container (see the step's
+          # advisory note + the compliance ADR). fail_on is the reference line
+          # only. The hard security gates are Trivy + Grype (0 fixable HIGH/CRIT).
           order = {"low": 1, "medium": 2, "high": 3}
           threshold = order.get(fail_on, 3)
-          gating = [
-              (sev, res)
-              for sev, res in results
+          high_fail = sum(
+              1 for sev, res in results
               if res == "fail" and order.get(sev, 0) >= threshold
-          ]
-          if gating:
-              print(
-                  f"FAIL: {len(gating)} rule(s) at severity >= '{fail_on}' "
-                  "failed the DISA STIG evaluation",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-
-          print(f"PASS: no failing rules at severity >= '{fail_on}'")
+          )
+          total = len(results)
+          scored = counts["pass"] + counts["fail"]
+          pct = (counts["pass"] * 100 // scored) if scored else 0
+          print(
+              f"OpenSCAP STIG scorecard (advisory): {counts['pass']}/{scored} "
+              f"applicable rules pass ({pct}%); {high_fail} fail at severity "
+              f">= '{fail_on}'; {counts['notapplicable']} not applicable of {total} total."
+          )
           PY
 
       - name: Upload OpenSCAP STIG report
