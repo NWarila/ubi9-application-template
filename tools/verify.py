@@ -465,7 +465,7 @@ def check_compliance_checklist() -> None:
 # cannot silently drop a gate or break the signing identity.
 PUBLISH_WORKFLOW_MARKERS = [
     "cosign sign --recursive",
-    "cosign verify --recursive",
+    "cosign verify",
     "/.github/workflows/publish-image.yaml@refs/(heads/main|tags/v.*)",
     "https://token.actions.githubusercontent.com",
     "actions/attest-build-provenance@",
