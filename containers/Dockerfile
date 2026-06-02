@@ -19,27 +19,34 @@ ARG BUILDKIT_SBOM_SCAN_STAGE=true
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG TARGETARCH
-# Space-separated dnf install specs (package names), e.g. "ca-certificates".
+# Space-separated dnf package install specs (names), e.g. "ca-certificates".
 ARG DNF_PACKAGES
 # Optional space-separated repo IDs to enable exclusively. Empty = use the base
 # image's default repositories.
 ARG DNF_REPOS=""
 
-# Assemble the runtime rootfs with dnf --installroot so the resulting tree
+# Assemble the runtime rootfs with microdnf --installroot so the resulting tree
 # contains the rpm database (/var/lib/rpm) and dnf history (/var/lib/dnf).
-# PRESERVING the rpmdb is mandatory: it is how Trivy/Grype/OpenSCAP enumerate
-# the installed packages. Deleting it would make scanners report zero packages
-# (a false "0 CVE" result), so this stage NEVER removes /rootfs/var/lib/rpm or
-# /rootfs/var/lib/dnf. Only the regenerable dnf cache/logs are pruned.
+# ubi-minimal ships microdnf (not dnf); --installroot requires it to be told
+# where the host's repo/vars/config live (it cannot infer them from the empty
+# installroot). PRESERVING the rpmdb is mandatory: it is how Trivy/Grype/OpenSCAP
+# enumerate the installed packages. Deleting it would make scanners report zero
+# packages (a false "0 CVE" result), so this stage NEVER removes
+# /rootfs/var/lib/rpm or /rootfs/var/lib/dnf. Only regenerable cache/logs are pruned.
 RUN set -eux; \
     test -n "${DNF_PACKAGES}" || { echo "DNF_PACKAGES must be set" >&2; exit 1; }; \
     mkdir -p /rootfs; \
-    dnf install -y --installroot=/rootfs --releasever=9 \
-      --setopt=install_weak_deps=false --setopt=tsflags=nodocs \
+    microdnf install -y --installroot=/rootfs --releasever=9 \
+      --config=/etc/dnf/dnf.conf --noplugins \
+      --setopt=reposdir=/etc/yum.repos.d \
+      --setopt=varsdir=/etc/dnf/vars \
+      --setopt=cachedir=/var/cache/microdnf-installroot \
+      --nodocs --setopt=install_weak_deps=0 \
       ${DNF_REPOS:+--disablerepo=* --enablerepo=${DNF_REPOS}} \
       ${DNF_PACKAGES}; \
-    dnf clean all --installroot=/rootfs; \
-    rm -rf /rootfs/var/cache/dnf /rootfs/var/log/dnf.log /rootfs/var/log/dnf.librepo.log /rootfs/var/log/hawkey.log; \
+    microdnf clean all; \
+    rm -rf /rootfs/var/cache/* /var/cache/microdnf-installroot \
+      /rootfs/var/log/dnf.log /rootfs/var/log/dnf.librepo.log /rootfs/var/log/hawkey.log; \
     test -s /rootfs/var/lib/rpm/rpmdb.sqlite || test -s /rootfs/var/lib/rpm/Packages || \
       { echo "rpm database missing from rootfs; scanners would see zero packages" >&2; exit 1; }
 

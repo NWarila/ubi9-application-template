@@ -13,6 +13,11 @@ world-writable-without-sticky paths; and the expected entrypoint.
 
 expected-entrypoint defaults to /usr/local/bin/app; image repos pass their own
 (e.g. /usr/local/bin/vault).
+
+The image filesystem is inspected from `docker export` without extracting it
+(tar -tvf for the manifest + permissions, tar -xOf for single-file contents) so
+the check is identical on Linux CI runners and developer workstations and never
+depends on the host's ability to recreate the rootfs's symlinks/devices.
 USAGE
 }
 
@@ -34,8 +39,7 @@ command -v docker >/dev/null 2>&1 || {
 }
 
 tmp_dir="$(mktemp -d)"
-rootfs_dir="${tmp_dir}/rootfs"
-mkdir -p "${rootfs_dir}"
+tar_path="${tmp_dir}/rootfs.tar"
 container_id=""
 cleanup() {
   if [[ -n "${container_id}" ]]; then
@@ -46,13 +50,25 @@ cleanup() {
 trap cleanup EXIT
 
 container_id="$(docker create "${image_ref}")"
-docker export "${container_id}" -o "${tmp_dir}/rootfs.tar"
-tar -xf "${tmp_dir}/rootfs.tar" -C "${rootfs_dir}"
-tar -tf "${tmp_dir}/rootfs.tar" | sed 's#^\./##' > "${tmp_dir}/files.txt"
+docker export "${container_id}" -o "${tar_path}"
+
+# Path manifest (normalized: no leading ./, no trailing / on dirs for matching).
+tar -tf "${tar_path}" | sed -e 's#^\./##' > "${tmp_dir}/files.txt"
+# Verbose manifest: mode owner size date time path[ -> target]. Used for the
+# permission scans below.
+tar -tvf "${tar_path}" > "${tmp_dir}/files-v.txt"
+
+# Emit one file to stdout from the tar, tolerating the optional leading ./.
+extract_file() {
+  local rel="${1#/}"
+  tar -xOf "${tar_path}" "${rel}" 2>/dev/null \
+    || tar -xOf "${tar_path}" "./${rel}" 2>/dev/null \
+    || true
+}
 
 assert_absent_file() {
   local path="${1#/}"
-  if grep -Fxq "${path}" "${tmp_dir}/files.txt"; then
+  if grep -Fxq "${path}" "${tmp_dir}/files.txt" || grep -Fxq "${path}/" "${tmp_dir}/files.txt"; then
     echo "forbidden runtime file exists: /${path}" >&2
     exit 1
   fi
@@ -97,7 +113,7 @@ for candidate in \
   var/lib/rpm/Packages \
   var/lib/rpm/Packages.db
 do
-  if [[ -s "${rootfs_dir}/${candidate}" ]]; then
+  if [[ "$(extract_file "${candidate}" | wc -c)" -gt 0 ]]; then
     rpmdb_found="${candidate}"
     break
   fi
@@ -108,49 +124,48 @@ if [[ -z "${rpmdb_found}" ]]; then
 fi
 
 # The RHEL CA bundle must be populated. /etc/pki/tls/certs/ca-bundle.crt is a
-# symlink into /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem on UBI, so
-# resolve it inside the exported rootfs before asserting it carries certs. The
-# Debian path (/etc/ssl/certs/ca-certificates.crt) does NOT exist on UBI.
-resolve_in_rootfs() {
-  local rel="${1#/}"
-  local p="${rootfs_dir}/${rel}"
-  local hops=0
-  while [[ -L "${p}" && ${hops} -lt 8 ]]; do
-    local tgt
-    tgt="$(readlink "${p}")"
-    case "${tgt}" in
-      /*) p="${rootfs_dir}${tgt}" ;;
-      *)  p="$(dirname "${p}")/${tgt}" ;;
-    esac
-    hops=$((hops + 1))
-  done
-  printf '%s' "${p}"
-}
-
-ca_link="/etc/pki/tls/certs/ca-bundle.crt"
-ca_real="$(resolve_in_rootfs "${ca_link}")"
-if [[ ! -s "${ca_real}" ]]; then
-  echo "CA bundle missing/empty: ${ca_link} (resolved to ${ca_real#${rootfs_dir}})" >&2
-  exit 1
-fi
-if ! grep -q "BEGIN CERTIFICATE" "${ca_real}"; then
-  echo "CA bundle at ${ca_link} contains no certificates" >&2
+# symlink into /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem on UBI; check
+# the resolved regular file (and the link path itself, in case an image ships a
+# regular file there). The Debian path /etc/ssl/certs/ca-certificates.crt does
+# NOT exist on UBI.
+ca_ok=""
+for candidate in \
+  etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+  etc/pki/tls/certs/ca-bundle.crt
+do
+  if extract_file "${candidate}" | grep -q "BEGIN CERTIFICATE"; then
+    ca_ok="${candidate}"
+    break
+  fi
+done
+if [[ -z "${ca_ok}" ]]; then
+  echo "CA bundle empty/absent: expected certificates reachable from /etc/pki/tls/certs/ca-bundle.crt" >&2
   exit 1
 fi
 
-# No setuid/setgid binaries.
-mapfile -t setuid_hits < <(find "${rootfs_dir}" -type f -perm /6000 2>/dev/null || true)
-if [[ ${#setuid_hits[@]} -gt 0 ]]; then
-  echo "setuid/setgid files present in runtime image:" >&2
-  printf '  /%s\n' "${setuid_hits[@]#${rootfs_dir}/}" >&2
-  exit 1
-fi
-
-# No world-writable paths unless the sticky bit is set (e.g. /tmp).
-mapfile -t ww_hits < <(find "${rootfs_dir}" -perm -0002 ! -perm -1000 2>/dev/null || true)
-if [[ ${#ww_hits[@]} -gt 0 ]]; then
-  echo "world-writable non-sticky paths present in runtime image:" >&2
-  printf '  /%s\n' "${ww_hits[@]#${rootfs_dir}/}" >&2
+# Permission scans from the verbose manifest (no extraction needed). Field 1 is
+# the mode string (type + 9 perm bits); symlinks (l...) are skipped.
+violations="$(awk '
+  {
+    mode = $1
+    type = substr(mode, 1, 1)
+    if (type == "l") next
+    # path is everything after the 5 leading fields (mode owner size date time)
+    path = $0
+    sub(/^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +/, "", path)
+    setuid = substr(mode, 4, 1)
+    setgid = substr(mode, 7, 1)
+    owrite = substr(mode, 9, 1)
+    sticky = substr(mode, 10, 1)
+    if (setuid == "s" || setuid == "S" || setgid == "s" || setgid == "S")
+      print "setuid/setgid: " path
+    if (owrite == "w" && sticky != "t" && sticky != "T")
+      print "world-writable (no sticky): " path
+  }
+' "${tmp_dir}/files-v.txt")"
+if [[ -n "${violations}" ]]; then
+  echo "runtime image permission violations:" >&2
+  printf '  %s\n' "${violations}" >&2
   exit 1
 fi
 
@@ -168,4 +183,4 @@ if [[ "${entrypoint}" == "null" || "${entrypoint}" != *"${expected_entrypoint}"*
   exit 1
 fi
 
-echo "runtime hardening checks passed for ${image_ref} (rpmdb=${rpmdb_found}, entrypoint~=${expected_entrypoint})"
+echo "runtime hardening checks passed for ${image_ref} (rpmdb=${rpmdb_found}, ca=${ca_ok}, entrypoint~=${expected_entrypoint})"

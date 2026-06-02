@@ -129,7 +129,7 @@ def check_dockerfile_contract() -> None:
 
     required_markers = [
         "FROM ${UBI_MICRO_IMAGE} AS runtime",
-        "dnf install -y --installroot=/rootfs",
+        "microdnf install -y --installroot=/rootfs",
         "DNF_PACKAGES",
         "APP_BINARY_AMD64",
         "APP_BINARY_ARM64",
