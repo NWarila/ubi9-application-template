@@ -44,6 +44,8 @@
     "forbidden_executables": [
       "/bin/sh",
       "/bin/bash",
+      "/usr/bin/sh",
+      "/usr/bin/bash",
       "/usr/bin/dnf",
       "/usr/bin/microdnf",
       "/usr/bin/rpm",

@@ -191,6 +191,9 @@ def check_runtime_script() -> None:
     text = script.read_text(encoding="utf-8")
     for path in [
         "/bin/sh",
+        "/bin/bash",
+        "/usr/bin/sh",
+        "/usr/bin/bash",
         "/usr/bin/dnf",
         "/usr/bin/microdnf",
         "/usr/bin/rpm",
@@ -199,6 +202,12 @@ def check_runtime_script() -> None:
         "/usr/bin/wget",
     ]:
         require(path in text, f"runtime hardening script does not assert absence of {path}")
+    # The /bin -> /usr/bin symlink means a shell at /usr/bin/bash also answers
+    # /bin/bash; require the generic shell-anywhere scan so the real path is caught.
+    require(
+        "s?bin/(sh|bash|dash" in text,
+        "runtime hardening must scan for a shell binary at any bin/sbin path",
+    )
     # The rpm database must be asserted PRESENT (preserved for scanners), and the
     # RHEL CA bundle must be asserted populated (the auto-unseal TLS path depends
     # on it; the Debian /etc/ssl/certs/ca-certificates.crt path does not exist on UBI).

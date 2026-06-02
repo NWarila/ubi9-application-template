@@ -83,10 +83,17 @@ assert_absent_tree() {
 }
 
 # No shell, no package manager, no network fetch tools in the runtime image.
+# Check the REAL paths (/usr/bin, /usr/sbin) as well as the /bin, /sbin compat
+# names: on UBI /bin is a symlink to /usr/bin, so a binary at /usr/bin/bash also
+# answers /bin/bash. Listing only /bin/* would miss it (the export tar stores the
+# real file under usr/bin and /bin only as a dir symlink).
 for executable in \
   /bin/sh \
   /bin/bash \
   /bin/dash \
+  /usr/bin/sh \
+  /usr/bin/bash \
+  /usr/bin/dash \
   /usr/bin/dnf \
   /usr/bin/microdnf \
   /usr/bin/rpm \
@@ -96,6 +103,17 @@ for executable in \
 do
   assert_absent_file "${executable}"
 done
+
+# Belt-and-suspenders: reject ANY shell binary anywhere under a bin/sbin dir,
+# regardless of the exact path, so a future package cannot smuggle a shell in at
+# an unanticipated location (the dependency closure of an RPM pulls bash by
+# default; the Dockerfile removes it and this proves it stayed removed).
+shell_hits="$(grep -E '(^|/)(usr/)?s?bin/(sh|bash|dash|ash|busybox|ksh|zsh|tcsh|csh)$' "${tmp_dir}/files.txt" || true)"
+if [[ -n "${shell_hits}" ]]; then
+  echo "shell binary present in runtime image:" >&2
+  printf '  /%s\n' "${shell_hits}" >&2
+  exit 1
+fi
 
 # Regenerable dnf cache/logs must not ship; the rpm DB and dnf history below
 # are deliberately NOT in this list (they are required present).
