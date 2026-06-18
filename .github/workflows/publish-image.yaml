@@ -1,23 +1,27 @@
 name: Publish image
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     tags:
       - "v*"
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-image-${{ github.ref }}
+  group: publish-image-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 env:
   MANIFEST: examples/image-manifest.json
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  SLSA_GENERATOR_TAG: "v2.1.0"
+  # Audited upstream binding for the tag-pinned SLSA generator.
+  SLSA_GENERATOR_TAG_SHA: "f7dd8c54c2067bafc12ca7a55595d5ee9b75204a"
   # ComplianceAsCode/content release used to build the DISA RHEL9 STIG datastream.
   # There is no prebuilt ssg-rhel9-ds.xml shipped for this tag, so the gate builds
   # it reproducibly from the SHA512-pinned source tarball below.
@@ -34,15 +38,48 @@ env:
   GRYPE_VERSION: "0.87.0"
 
 jobs:
+  slsa-generator-tag-integrity:
+    name: slsa generator tag integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify SLSA generator tag binding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          actual="$(
+            gh api "repos/slsa-framework/slsa-github-generator/git/ref/tags/${SLSA_GENERATOR_TAG}" \
+              --jq '.object.sha'
+          )"
+          printf 'slsa-framework/slsa-github-generator refs/tags/%s -> %s\n' \
+            "${SLSA_GENERATOR_TAG}" \
+            "${actual}"
+
+          if [[ "${actual}" != "${SLSA_GENERATOR_TAG_SHA}" ]]; then
+            printf 'SLSA generator tag drift: expected %s, got %s\n' \
+              "${SLSA_GENERATOR_TAG_SHA}" \
+              "${actual}" >&2
+            exit 1
+          fi
+
   publish:
     name: publish signed image
+    needs: slsa-generator-tag-integrity
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      attestations: write
       contents: read
       id-token: write
       packages: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.image.outputs.digest }}
+      ref: ${{ steps.image.outputs.ref }}
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -120,31 +157,19 @@ jobs:
             printf 'ref=%s@%s\n' "${image}" "${digest}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Generate GitHub artifact attestation
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
-        with:
-          subject-name: ${{ steps.image.outputs.image }}
-          subject-digest: ${{ steps.image.outputs.digest }}
-          push-to-registry: true
-
       - name: Sign image digest with Cosign
         env:
           COSIGN_YES: "true"
           IMAGE_REF: ${{ steps.image.outputs.ref }}
         run: cosign sign --recursive "${IMAGE_REF}"
 
-      - name: Verify GitHub artifact attestation
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE_REF: ${{ steps.image.outputs.ref }}
-        run: gh attestation verify "oci://${IMAGE_REF}" --repo "${GITHUB_REPOSITORY}"
-
       - name: Verify Cosign signature
         env:
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/publish-image.yaml@${{ github.ref }}
           IMAGE_REF: ${{ steps.image.outputs.ref }}
         run: |
           cosign verify "${IMAGE_REF}" \
-            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-image.yaml@refs/(heads/main|tags/v.*)" \
+            --certificate-identity "${CERTIFICATE_IDENTITY}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 
       - name: OpenSCAP DISA RHEL9 STIG scorecard (advisory)
@@ -327,3 +352,19 @@ jobs:
         env:
           IMAGE_REF: ${{ steps.image.outputs.ref }}
         run: bash tools/verify_public_ghcr_pull.sh "${IMAGE_REF}"
+
+  slsa-provenance:
+    name: slsa l3 provenance
+    needs: publish
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.publish.outputs.image }}
+      digest: ${{ needs.publish.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}

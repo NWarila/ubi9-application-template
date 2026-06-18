@@ -9,8 +9,8 @@ for a drop-in workflow that produces every required evidence type below.
 | Evidence | Expected Mechanism |
 | --- | --- |
 | SBOM | Docker BuildKit SBOM attestation, created with `--sbom=true` or `--attest type=sbom`. The preserved rpm database at `/var/lib/rpm` lets the scanner enumerate installed packages. |
-| Provenance | Docker BuildKit provenance attestation, preferably `--provenance=mode=max`. |
-| Artifact attestation | GitHub `actions/attest` for the pushed image digest. BuildKit carries the SBOM attestation. |
+| Build metadata | Docker BuildKit provenance attestation, preferably `--provenance=mode=max`, as companion build metadata. |
+| SLSA provenance | SLSA container generator provenance, written as a cosign OCI attestation by `slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0`. Verify it with the exact-identity contract in [`slsa-l3-provenance.md`](slsa-l3-provenance.md). |
 | Signature | Cosign/Sigstore keyless signature over the image digest, signed with `cosign sign --recursive` so attached SBOM and attestation manifests are covered. |
 | Compliance and scan | OpenSCAP against the RHEL 9 STIG profile, plus Trivy and Grype vulnerability scans of the pushed digest. |
 | Runtime hardening | Output from `tests/runtime-hardening.sh <image-ref>`. |
@@ -31,9 +31,9 @@ for a drop-in workflow that produces every required evidence type below.
   <https://docs.docker.com/build/metadata/attestations/>
 - Docker documents SBOM attestation generation and local validation:
   <https://docs.docker.com/build/metadata/attestations/sbom/>
-- GitHub artifact attestations can establish provenance for binaries and
-  container images:
-  <https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations>
+- The SLSA GitHub generator publishes container provenance through its trusted
+  reusable workflow:
+  <https://github.com/slsa-framework/slsa-github-generator/tree/main/internal/builders/container>
 - Sigstore Cosign signs and verifies container images:
   <https://docs.sigstore.dev/quickstart/quickstart-cosign/>
 - SLSA Build levels describe increasing provenance guarantees:

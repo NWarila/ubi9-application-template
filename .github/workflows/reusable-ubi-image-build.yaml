@@ -11,10 +11,10 @@ name: Reusable UBI image build
 # can call this directly instead of mirroring the build pipeline into their
 # own workflow yaml.
 #
-# This is a local --load build for runtime testing. Persistent SBOM,
-# provenance, attestation, and signature evidence belong in a separate
-# publish workflow that exports to a registry by digest. See
-# docs/how-to/publish-image.md for the publish-side contract.
+# This is a local --load build for pull-request and runtime testing. Persistent
+# SBOM, SLSA provenance, and signature evidence belong in publish-image.yaml,
+# which exports to a registry by digest and calls the trusted SLSA generator.
+# See docs/how-to/publish-image.md for the publish-side contract.
 #
 # Caller pattern:
 #   uses: NWarila/ubi9-application-template/.github/workflows/reusable-ubi-image-build.yaml@<40-char-sha>
