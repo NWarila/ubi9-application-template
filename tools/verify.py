@@ -252,14 +252,16 @@ def check_build_tool_pins() -> None:
         )
 
     renovate = (ROOT / ".github/renovate.json5").read_text(encoding="utf-8")
-    for marker in [
-        "depName=(?<depName>[^\\\\s]+)",
-        "currentDigest",
-        "GO_IMAGE",
-        "\"matchDatasources\": [\"docker\"]",
-        "\"matchDepNames\": [\"golang\"]",
+    # The shared preset owns the Go-FIPS clamp; the local config must extend it
+    # while retaining the customManager markers that detect GO_IMAGE builder pins.
+    for description, marker in [
+        ("shared Renovate preset", "github>NWarila/.github"),
+        ("Go builder depName capture", "depName=(?<depName>[^\\\\s]+)"),
+        ("Go builder digest capture", "currentDigest"),
+        ("Go builder variable matcher", "GO_IMAGE"),
+        ("Docker datasource rule", "\"matchDatasources\": [\"docker\"]"),
     ]:
-        require(marker in renovate, f"Renovate config missing Go image pin marker: {marker}")
+        require(marker in renovate, f"Renovate config missing {description}: {marker}")
 
 
 def check_build_args_generator() -> None:
