@@ -4,6 +4,7 @@
   // Renovate config for NWarila/ubi9-application-template. Keep Actions
   // pinned by digest and surface UBI base + Go builder pins for review in downstreams.
   "extends": [
+    "github>NWarila/.github",
     "config:recommended",
     ":dependencyDashboard",
     ":semanticCommits",
@@ -12,7 +13,6 @@
 
   "schedule": ["before 6am on monday"],
   "labels": ["dependencies"],
-  "prConcurrentLimit": 5,
   "minimumReleaseAge": "7 days",
   "internalChecksFilter": "strict",
 
@@ -87,19 +87,6 @@
       "groupName": "actions/setup-python",
       "semanticCommitType": "ci",
       "semanticCommitScope": "deps"
-    },
-    {
-      "matchDatasources": ["docker"],
-      "matchDepNames": ["golang"],
-      "groupName": "golang build image",
-      "semanticCommitType": "deps",
-      "semanticCommitScope": "deps",
-      // The GOFIPS140 validated Go Cryptographic Module v1.0.0 (CMVP #5247)
-      // is selectable in Go 1.24 and 1.25. Go 1.26 introduces a not-yet-
-      // validated v1.26.0 module, so capping below 1.26.0 is the fail-closed
-      // FIPS guard: Renovate must never bump the builder past the last Go
-      // release whose snapshot maps to a validated module.
-      "allowedVersions": "<1.26.0"
     },
     {
       "matchDatasources": ["docker"],
