@@ -85,6 +85,7 @@ def check_docs_layout() -> None:
         "docs/reference/governance.md",
         "docs/reference/quality-gates.md",
         "docs/reference/supply-chain-evidence.md",
+        "docs/reference/slsa-l3-provenance.md",
         "docs/compliance/README.md",
         "docs/compliance/cis-docker-image-applicability.md",
         "docs/compliance/rhel-9-stig-v2r8-applicability.md",
@@ -463,14 +464,32 @@ def check_compliance_checklist() -> None:
 # part of the certificate SAN) and the carrier of the supply-chain + STIG + CVE
 # release gates. Assert its load-bearing markers so a derived image repository
 # cannot silently drop a gate or break the signing identity.
+SLSA_GENERATOR_TAG = "v2.1.0"
+SLSA_GENERATOR_SHA = "f7dd8c54c2067bafc12ca7a55595d5ee9b75204a"
+SLSA_GENERATOR_WORKFLOW = (
+    "slsa-framework/slsa-github-generator/.github/workflows/"
+    "generator_container_slsa3.yml"
+)
+SLSA_GENERATOR_IDENTITY = (
+    "https://github.com/"
+    f"{SLSA_GENERATOR_WORKFLOW}@refs/tags/{SLSA_GENERATOR_TAG}"
+)
+
 PUBLISH_WORKFLOW_MARKERS = [
     "cosign sign --recursive",
     "cosign verify",
-    "/.github/workflows/publish-image.yaml@refs/(heads/main|tags/v.*)",
+    "--certificate-identity \"${CERTIFICATE_IDENTITY}\"",
     "https://token.actions.githubusercontent.com",
-    "actions/attest-build-provenance@",
     "--provenance=mode=max",
     "--sbom=true",
+    f'SLSA_GENERATOR_TAG: "{SLSA_GENERATOR_TAG}"',
+    f'SLSA_GENERATOR_TAG_SHA: "{SLSA_GENERATOR_SHA}"',
+    "gh api \"repos/slsa-framework/slsa-github-generator/git/ref/tags/${SLSA_GENERATOR_TAG}\"",
+    f"uses: {SLSA_GENERATOR_WORKFLOW}@{SLSA_GENERATOR_TAG}",
+    "image: ${{ needs.publish.outputs.image }}",
+    "digest: ${{ needs.publish.outputs.digest }}",
+    "registry-username: ${{ github.actor }}",
+    "registry-password: ${{ secrets.GITHUB_TOKEN }}",
     "oscap-podman",
     "xccdf_org.ssgproject.content_profile_stig",
     "ssg-rhel9-ds.xml",
@@ -492,6 +511,53 @@ def check_publish_workflow() -> None:
         not missing,
         "publish-image.yaml missing required release-gate markers: " + ", ".join(missing),
     )
+    forbidden = [
+        "gh attestation verify",
+        "--certificate-identity-regexp",
+        "actions/attest-build-provenance@",
+    ]
+    present = [marker for marker in forbidden if marker in text]
+    require(
+        not present,
+        "publish-image.yaml must use the SLSA generator exact-identity path, not: "
+        + ", ".join(present),
+    )
+
+
+def check_slsa_provenance_contract() -> None:
+    reference = ROOT / "docs/reference/slsa-l3-provenance.md"
+    require(reference.is_file(), "missing docs/reference/slsa-l3-provenance.md")
+    text = reference.read_text(encoding="utf-8")
+    for marker in [
+        SLSA_GENERATOR_WORKFLOW,
+        SLSA_GENERATOR_TAG,
+        SLSA_GENERATOR_SHA,
+        SLSA_GENERATOR_IDENTITY,
+        "cosign verify-attestation --type slsaprovenance <image>@<digest>",
+        f"--certificate-identity {SLSA_GENERATOR_IDENTITY}",
+        "--certificate-oidc-issuer https://token.actions.githubusercontent.com",
+        "slsa-verifier verify-image <image>@<digest>",
+        "--source-uri github.com/NWarila/ubi9-application-template",
+        f"--builder-id {SLSA_GENERATOR_IDENTITY}",
+        "`gh attestation verify` is intentionally excluded",
+    ]:
+        require(marker in text, f"slsa-l3-provenance.md missing marker: {marker}")
+
+    for path in [
+        reference,
+        ROOT / "docs/how-to/publish-image.md",
+    ]:
+        doc_text = path.read_text(encoding="utf-8")
+        require(
+            "--certificate-identity-regexp" not in doc_text,
+            f"{path.relative_to(ROOT)} must not document regexp identity verification",
+        )
+        if path != reference:
+            require(
+                "gh attestation verify" not in doc_text,
+                f"{path.relative_to(ROOT)} must not document gh attestation verify "
+                "for SLSA generator provenance",
+            )
 
 
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]+\]\(([^)]+)\)")
@@ -560,6 +626,7 @@ TARGETS = {
     "security-workflows": check_security_workflows,
     "template-reusables": check_template_reusables,
     "publish-workflow": check_publish_workflow,
+    "slsa-provenance-contract": check_slsa_provenance_contract,
     "compliance-checklist": check_compliance_checklist,
     "stale-placeholders": check_stale_placeholders,
     "markdown-links": check_markdown_links,
@@ -578,6 +645,7 @@ GROUPS = {
         "security-workflows",
         "template-reusables",
         "publish-workflow",
+        "slsa-provenance-contract",
         "compliance-checklist",
         "stale-placeholders",
         "markdown-links",
@@ -594,6 +662,7 @@ GROUPS = {
         "security-workflows",
         "template-reusables",
         "publish-workflow",
+        "slsa-provenance-contract",
         "compliance-checklist",
         "stale-placeholders",
         "markdown-links",

@@ -9,17 +9,19 @@ evidence.
 
 The release job should:
 
-1. Build application artifacts and verify their SHA256 values against the
+1. Verify the audited SLSA generator tag still resolves to the reviewed commit.
+2. Build application artifacts and verify their SHA256 values against the
    reviewed manifest.
-2. Build and push the image by digest with BuildKit SBOM and provenance
+3. Build and push the image by digest with BuildKit SBOM and provenance
    enabled. Because the runtime rootfs keeps the rpm database at
    `/var/lib/rpm`, the SBOM and scanners see every installed package.
-3. Generate a GitHub artifact attestation for the pushed image digest.
 4. Sign the pushed digest with Cosign/Sigstore keyless, using `--recursive`
    so attached SBOM and attestation manifests are signed too.
 5. Scan and compliance-check the pushed digest: OpenSCAP against the RHEL 9
    STIG profile, plus Trivy and Grype.
 6. Run runtime hardening against the same digest, not a mutable tag.
+7. Call the SLSA container generator with the image name and digest so it writes
+   a cosign OCI provenance attestation from the trusted reusable workflow.
 
 Docker's local `--load` exporter is not an evidence path. It is useful for
 runtime tests, but it does not preserve image attestations in the Docker image
@@ -28,17 +30,21 @@ you are validating SBOM files before a push.
 
 ## Workflow Skeleton
 
-Pin every `uses:` value to a reviewed commit SHA before enabling this in a real
-repository. The tags below are orientation labels, not pins.
+Pin every ordinary `uses:` value to a reviewed commit SHA before enabling this
+in a real repository. The SLSA generator reusable is the exception: keep it on
+the semantic-version tag shown below and keep the tag-integrity guard beside it.
+The version comments on SHA-pinned actions are orientation labels, not pins.
 
 ```yaml
 name: Publish image
 
 on:
+  pull_request:
+    branches: [main]
   push:
+    branches: [main]
     tags:
       - "v*"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -47,17 +53,40 @@ env:
   MANIFEST: examples/image-manifest.json
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  SLSA_GENERATOR_TAG: "v2.1.0"
+  SLSA_GENERATOR_TAG_SHA: "f7dd8c54c2067bafc12ca7a55595d5ee9b75204a"
 
 jobs:
+  slsa-generator-tag-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify SLSA generator tag binding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          actual="$(gh api "repos/slsa-framework/slsa-github-generator/git/ref/tags/${SLSA_GENERATOR_TAG}" --jq '.object.sha')"
+          if [[ "${actual}" != "${SLSA_GENERATOR_TAG_SHA}" ]]; then
+            printf 'SLSA generator tag drift: expected %s, got %s\n' "${SLSA_GENERATOR_TAG_SHA}" "${actual}" >&2
+            exit 1
+          fi
+
   publish:
+    needs: slsa-generator-tag-integrity
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
       packages: write
-      attestations: write
-      artifact-metadata: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.image.outputs.digest }}
+      ref: ${{ steps.image.outputs.ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@<40-char-sha> # v6.0.2
@@ -114,17 +143,18 @@ jobs:
             printf 'ref=%s@%s\n' "${image}" "${digest}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Generate GitHub artifact attestation
-        uses: actions/attest@<40-char-sha> # v4
-        with:
-          subject-name: ${{ steps.image.outputs.image }}
-          subject-digest: ${{ steps.image.outputs.digest }}
-          push-to-registry: true
-
       - name: Sign image digest
         env:
           COSIGN_YES: "true"
         run: cosign sign --recursive "${{ steps.image.outputs.ref }}"
+
+      - name: Verify image signature
+        env:
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/publish-image.yaml@${{ github.ref }}
+        run: |
+          cosign verify "${{ steps.image.outputs.ref }}" \
+            --certificate-identity "${CERTIFICATE_IDENTITY}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
       - name: Scan and compliance-check published image
         run: |
@@ -136,6 +166,21 @@ jobs:
 
       - name: Test published image hardening
         run: bash tests/runtime-hardening.sh "${{ steps.image.outputs.ref }}"
+
+  slsa-provenance:
+    needs: publish
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.publish.outputs.image }}
+      digest: ${{ needs.publish.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ## Review Rules
@@ -154,11 +199,17 @@ jobs:
 ## Verification
 
 After the workflow publishes an image, verify the evidence from a clean
-checkout:
+checkout with the exact SLSA generator identity. The reference contract is
+kept in [`../reference/slsa-l3-provenance.md`](../reference/slsa-l3-provenance.md).
 
 ```sh
-gh attestation verify oci://ghcr.io/OWNER/IMAGE:TAG -R OWNER/REPO
-cosign verify ghcr.io/OWNER/IMAGE@sha256:DIGEST \
-  --certificate-identity-regexp 'https://github.com/OWNER/REPO/.github/workflows/.*' \
+cosign verify-attestation --type slsaprovenance <image>@<digest> \
+  --certificate-identity https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@refs/tags/v2.1.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+```sh
+slsa-verifier verify-image <image>@<digest> \
+  --source-uri github.com/NWarila/ubi9-application-template \
+  --builder-id https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@refs/tags/v2.1.0
 ```
