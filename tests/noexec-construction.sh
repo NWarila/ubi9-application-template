@@ -21,5 +21,5 @@ derived="$scratch/.tmpl01a-tools"
 output=$(bash "$copy/tests/contracts.sh" "$install_dir")
 printf '%s\n' "$output"
 [[ "$output" != *'FAIL '* ]]
-[[ "${output##*$'\n'}" == 'TOTAL 207/207' ]]
+[[ "${output##*$'\n'}" == 'TOTAL 210/210' ]]
 [[ ! -e "$derived" ]]

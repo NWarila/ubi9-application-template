@@ -1,1 +1,36 @@
-{"_type":"https://in-toto.io/Statement/v1","predicateType":"https://slsa.dev/provenance/v1","predicate":{"buildDefinition":{"resolvedDependencies":[{"uri":"pkg:docker/registry.access.redhat.com/ubi9/ubi-minimal?digest=sha256%3A463cae32c6f6f5594b11a5c22de275016bd8545ce58a6373388e8b24f13fc15c","digest":{"sha256":"463cae32c6f6f5594b11a5c22de275016bd8545ce58a6373388e8b24f13fc15c"}},{"uri":"pkg:docker/registry.access.redhat.com/ubi9/ubi-micro?digest=sha256%3A35de56a9413112f1474e392ebc35e0cf6f0fb484c8e8877bbae59b513694b41f","digest":{"sha256":"35de56a9413112f1474e392ebc35e0cf6f0fb484c8e8877bbae59b513694b41f"}},{"uri":"pkg:docker/docker/dockerfile@1.7.1?platform=linux%2Famd64","digest":{"sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}]}}}
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicateType": "https://slsa.dev/provenance/v1",
+  "predicate": {
+    "buildDefinition": {
+      "buildType": "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md",
+      "resolvedDependencies": [
+        {
+          "uri": "pkg:docker/registry.access.redhat.com/ubi9/ubi-minimal?digest=sha256%3A463cae32c6f6f5594b11a5c22de275016bd8545ce58a6373388e8b24f13fc15c",
+          "digest": {
+            "sha256": "463cae32c6f6f5594b11a5c22de275016bd8545ce58a6373388e8b24f13fc15c"
+          }
+        },
+        {
+          "uri": "pkg:docker/registry.access.redhat.com/ubi9/ubi-micro?digest=sha256%3A35de56a9413112f1474e392ebc35e0cf6f0fb484c8e8877bbae59b513694b41f",
+          "digest": {
+            "sha256": "35de56a9413112f1474e392ebc35e0cf6f0fb484c8e8877bbae59b513694b41f"
+          }
+        },
+        {
+          "uri": "pkg:docker/docker/dockerfile@1.7.1?platform=linux%2Famd64",
+          "digest": {
+            "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        }
+      ]
+    },
+    "runDetails": {
+      "metadata": {
+        "buildkit_completeness": {
+          "resolvedDependencies": true
+        }
+      }
+    }
+  }
+}

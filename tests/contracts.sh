@@ -1288,6 +1288,9 @@ check materials-extra-alpine fixture_materials_fail extra-alpine
 check materials-missing-digest fixture_materials_fail missing-digest
 check materials-different-digest fixture_materials_fail different-digest
 check materials-syntax-frontend fixture_materials_fail syntax-frontend
+check materials-resolved-dependencies-incomplete fixture_materials_fail resolved-dependencies-incomplete
+check materials-resolved-dependencies-missing-completeness fixture_materials_fail resolved-dependencies-missing-completeness
+check materials-wrong-build-type fixture_materials_fail wrong-build-type
 check runtime-path-fake-bash fixture_hostile_shell_runtime bash
 check runtime-path-fake-jq fixture_hostile_shell_runtime jq
 check runtime-path-fake-gh fixture_hostile_shell_runtime gh

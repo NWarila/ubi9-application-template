@@ -11,7 +11,9 @@ from pathlib import Path
 from urllib.parse import parse_qsl, unquote_to_bytes, urlsplit
 
 
+STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
+BUILDKIT_BUILD_TYPE = "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 IMAGE_COMPONENT = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
 IMAGE_HOST = r"[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?"
@@ -244,12 +246,24 @@ def approved_dependencies(root_base, builders, mode, base_image, base_digest):
 
 
 def observed_dependencies(statement):
-    if not isinstance(statement, dict) or statement.get("predicateType") != PREDICATE_TYPE:
+    if not isinstance(statement, dict) or statement.get("_type") != STATEMENT_TYPE:
+        fail("document is not an in-toto Statement v1")
+    if statement.get("predicateType") != PREDICATE_TYPE:
         fail("document is not SLSA provenance v1")
     try:
-        dependencies = statement["predicate"]["buildDefinition"]["resolvedDependencies"]
+        predicate = statement["predicate"]
+        build_definition = predicate["buildDefinition"]
+        build_type = build_definition["buildType"]
+        dependencies = build_definition["resolvedDependencies"]
+        dependencies_complete = predicate["runDetails"]["metadata"]["buildkit_completeness"][
+            "resolvedDependencies"
+        ]
     except (KeyError, TypeError):
-        fail("provenance has no resolvedDependencies array")
+        fail("provenance is missing required BuildKit SLSA v1 fields")
+    if build_type != BUILDKIT_BUILD_TYPE:
+        fail("provenance buildType is not the pinned BuildKit SLSA definition")
+    if dependencies_complete is not True:
+        fail("provenance resolvedDependencies is not declared complete")
     if not isinstance(dependencies, list):
         fail("resolvedDependencies is not an array")
     observed = set()

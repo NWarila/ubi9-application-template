@@ -40,8 +40,8 @@ bash "$clone/tools/install-trust-tree.sh" "$clone" "$installed"
 
 contracts_output=$(bash "$installed/tests/contracts.sh" "$tool_dir")
 printf '%s\n' "$contracts_output"
-[[ "${contracts_output##*$'\n'}" == 'TOTAL 207/207' ]]
+[[ "${contracts_output##*$'\n'}" == 'TOTAL 210/210' ]]
 
 mutations_output=$(bash "$installed/tests/mutations.sh" "$tool_dir")
 printf '%s\n' "$mutations_output"
-[[ "$(grep -c $'^MUTATION\t' <<< "$mutations_output")" -eq 77 ]]
+[[ "$(grep -c $'^MUTATION\t' <<< "$mutations_output")" -eq 80 ]]

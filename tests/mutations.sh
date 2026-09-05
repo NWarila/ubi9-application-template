@@ -63,6 +63,9 @@ rows=(
   'materials-missing-digest|1'
   'materials-different-digest|1'
   'materials-syntax-frontend|1'
+  'materials-resolved-dependencies-incomplete|1'
+  'materials-resolved-dependencies-missing-completeness|1'
+  'materials-wrong-build-type|1'
   'runtime-path-fake-bash|6'
   'runtime-path-fake-jq|6'
   'runtime-path-fake-gh|6'
@@ -101,7 +104,7 @@ output=$(TMPL01A_META_INNER=1 \
   TMPL01A_OBSERVED_STATUS_FILE="$status_file" \
   TMPL01A_OBSERVED_IDS_FILE="$ids_file" \
   bash "$installed_root/tests/contracts.sh" "$tool_dir")
-[[ "${output##*$'\n'}" == 'TOTAL 207/207' ]]
+[[ "${output##*$'\n'}" == 'TOTAL 210/210' ]]
 [[ "$(wc -l < "$status_file")" -eq "${#rows[@]}" ]]
 for row in "${rows[@]}"; do
   fixture=${row%%|*}
