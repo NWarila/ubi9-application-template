@@ -1,0 +1,9 @@
+#!/usr/bin/bash -p
+set -euo pipefail
+
+if [[ -n "${CRANE_STUB_LOG:-}${CRANE_STUB_DIGEST_FAIL:-}${CRANE_STUB_DIGEST_MAP:-}${CRANE_STUB_DIGEST:-}${CRANE_STUB_MANIFEST_FAIL:-}${CRANE_STUB_INDEX:-}${CRANE_STUB_CONFIG_FAIL:-}${CRANE_STUB_CONFIG:-}${CRANE_STUB_TAG_FAIL:-}${CRANE_STUB_TAG_SPY:-}" ]]; then
+  source_path=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
+  root=$(cd "$(dirname "$source_path")/../.." && pwd -P)
+  exec "$root/tools/.tmpl01a-runtime/bash" --noprofile --norc -p "$root/tests/fixtures/bin/crane" "$@"
+fi
+exec "${TMPL01A_REAL_CRANE:?required}" "$@"

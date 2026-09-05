@@ -1,0 +1,13 @@
+{
+  "repository": "NWarila/ubi9-base-micro",
+  "allowed": { "refs": ["refs/heads/main"], "events": ["push", "schedule", "workflow_dispatch"] },
+  "target": "runtime",
+  "base":    { "image": "mirror.invalid/ubi9/ubi-micro",
+               "digest": "sha256:35de56a9413112f1474e392ebc35e0cf6f0fb484c8e8877bbae59b513694b41f",
+               "mediaType": "application/vnd.docker.distribution.manifest.list.v2+json" },
+  "builder": { "image": "mirror.invalid/ubi9/ubi-minimal",
+               "digest": "sha256:463cae32c6f6f5594b11a5c22de275016bd8545ce58a6373388e8b24f13fc15c",
+               "mediaType": "application/vnd.docker.distribution.manifest.list.v2+json" },
+  "build_args": { "BASE_IMAGE": "base.image", "BASE_DIGEST": "base.digest",
+                  "BUILDER_IMAGE": "builder.image", "BUILDER_DIGEST": "builder.digest" }
+}

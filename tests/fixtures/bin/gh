@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -n "${GH_STUB_LOG:-}" ]]; then printf '%s\n' "$*" >> "$GH_STUB_LOG"; fi
+if [[ -n "${GH_STUB_FD_LOG:-}" ]]; then printf '%s\n' "$0" >> "$GH_STUB_FD_LOG"; fi
+if [[ -n "${GH_STUB_SWAP_TARGET:-}" ]]; then
+  : "${GH_STUB_SWAP_MARKER:?required}"
+  if [[ ! -e "$GH_STUB_SWAP_MARKER" ]]; then
+    /usr/bin/mv -f -- "${GH_STUB_SWAP_REPLACEMENT:?required}" "$GH_STUB_SWAP_TARGET"
+    : > "$GH_STUB_SWAP_MARKER"
+  fi
+fi
+if [[ "${1:-}" == api ]]; then
+  [[ "${GH_STUB_API_FAIL:-0}" != 1 ]] || exit 1
+  if [[ -n "${GH_STUB_TAGS_FILE:-}" ]]; then cat "$GH_STUB_TAGS_FILE"; fi
+  exit 0
+fi
+[[ "${1:-}" == attestation && "${2:-}" == verify ]] || exit 2
+
+predicate=
+reference=
+for ((i=1; i<=$#; i++)); do
+  value=${!i}
+  if [[ "$value" == --predicate-type ]]; then
+    j=$((i + 1)); predicate=${!j}
+  elif [[ "$value" == oci://* ]]; then
+    reference=$value
+  fi
+done
+digest=${reference##*@sha256:}
+mode=${GH_STUB_MODE:-success}
+state=${GH_STUB_STATE:-/tmp/tmpl01a-gh-stub-state}
+count=0
+if [[ -f "$state" ]]; then read -r count < "$state"; fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$state"
+
+if [[ "$mode" == "fail-${count}" ]]; then exit 1; fi
+case "$mode" in
+  empty) printf '%s\n' '[]'; exit 0 ;;
+  mismatch) digest=$(printf '0%.0s' {1..64}) ;;
+esac
+statement=$(jq -cn --arg p "$predicate" --arg d "$digest" \
+  '{predicateType:$p,subject:[{digest:{sha256:$d}}],predicate:{spdxVersion:"SPDX-2.3",documentDescribes:[],packages:[]}}')
+
+if [[ "$mode" == decide || "$mode" == decide-duplicate ]]; then
+  if [[ "$count" -eq 5 ]]; then
+    predicate_body=$(jq -c . "${GH_STUB_SPDX_FILE:?required}")
+    statement=$(jq -cn --arg d "$digest" --argjson body "$predicate_body" \
+      '{predicateType:"https://spdx.dev/Document/v2.3",subject:[{digest:{sha256:$d}}],predicate:$body}')
+    if [[ "$mode" == decide-duplicate ]]; then
+      jq -cn --argjson s "$statement" '[{verificationResult:{statement:$s}},{verificationResult:{statement:$s}}]'
+      exit 0
+    fi
+  fi
+fi
+jq -cn --argjson s "$statement" '[{verificationResult:{statement:$s}}]'

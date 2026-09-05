@@ -1,0 +1,13 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "documentDescribes": ["SPDXRef-amd64-root"],
+  "packages": [
+    {"SPDXID":"SPDXRef-amd64-root","comment":"pre-existing comment\nTMPL01A child manifest digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa platform=linux/amd64","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:rpm/redhat/root@1-1?arch=amd64"}]},
+    {"SPDXID":"SPDXRef-amd64-zlib","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:rpm/redhat/zlib@1.2.13-1?arch=x86_64&epoch=0&distro=rhel-9"}]},
+    {"SPDXID":"SPDXRef-amd64-bash","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:rpm/redhat/bash@5.1.8-9.el9?arch=x86_64&epoch=0&distro=rhel-9"}]},
+    {"SPDXID":"SPDXRef-amd64-coreutils","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:rpm/redhat/coreutils@8.32-39.el9?arch=x86_64&epoch=0&distro=rhel-9"}]},
+    {"SPDXID":"SPDXRef-amd64-nonrpm","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:generic/example@1"}]},
+    {"SPDXID":"SPDXRef-amd64-zero"},
+    {"SPDXID":"SPDXRef-arm64-wrong-arch","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:rpm/redhat/wrong@1-1?arch=aarch64"}]}
+  ]
+}

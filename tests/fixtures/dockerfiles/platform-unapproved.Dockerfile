@@ -1,0 +1,6 @@
+ARG BASE_IMAGE
+ARG BASE_DIGEST
+ARG BUILDER_IMAGE
+ARG BUILDER_DIGEST
+FROM ${BUILDER_IMAGE}@${BUILDER_DIGEST} AS builder
+FROM --platform=linux/amd64 docker.io/library/alpine:latest AS runtime

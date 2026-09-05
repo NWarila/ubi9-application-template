@@ -1,0 +1,4 @@
+#!/usr/bin/bash -p
+printf 'gh\n' >> "${HOSTILE_RUNTIME_SPY:?required}"
+printf '[]\n'
+exit 0

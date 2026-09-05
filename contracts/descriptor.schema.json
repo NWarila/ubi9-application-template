@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/NWarila/ubi9-application-template/contracts/descriptor.schema.json",
+  "title": "TMPL01A child image descriptor",
+  "$comment": "Artifact name: descriptor-<architecture>-<run_id>-<run_attempt>.json; upload uses overwrite=true and if-no-files-found=error.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mediaType", "size", "digest", "platform", "run_id", "run_attempt"],
+  "properties": {
+    "mediaType": {"const": "application/vnd.oci.image.manifest.v1+json"},
+    "size": {"type": "integer", "minimum": 1},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "os"],
+      "properties": {
+        "architecture": {"enum": ["amd64", "arm64"]},
+        "os": {"const": "linux"}
+      }
+    },
+    "run_id": {"type": "string", "pattern": "^[0-9]+$"},
+    "run_attempt": {"type": "string", "pattern": "^[0-9]+$"}
+  }
+}

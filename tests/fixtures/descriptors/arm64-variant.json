@@ -1,0 +1,1 @@
+{"mediaType":"application/vnd.oci.image.manifest.v1+json","size":610,"digest":"sha256:bd44eb136a95dcc8dc58995e43abc40a413f2e8e3d4a2aae6bccbe94686acb05","platform":{"architecture":"arm64","os":"linux","variant":"v8"},"run_id":"4242","run_attempt":"1"}

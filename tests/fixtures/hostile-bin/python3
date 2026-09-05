@@ -1,0 +1,3 @@
+#!/usr/bin/bash -p
+printf 'python3\n' >> "${HOSTILE_RUNTIME_SPY:?required}"
+exit 0
