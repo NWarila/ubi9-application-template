@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/NWarila/ubi9-application-template/contracts/publish-inputs.schema.json",
+  "title": "TMPL01A reusable publication call envelope",
+  "description": "Enforcing workflow-call envelope. GHCR names normalize to ghcr.io/<lower(owner)>/<image>. A1 passes base-digest unchanged as BASE_DIGEST, uses it as the BASE_DIGEST build argument, and writes io.nwarila.base.digest from the same value. Candidate signer equals template-ref. Current/recovery signers are authorized by signers.json. Recovery is wired to a protected environment by A1. BASE01 MUST publish the :base-micro retirement warning only after independent post-cutover verification of :latest succeeds. Before warning/removal it MUST inventory workflow, Dockerfile, deployment, and documentation references. Recovery is not a mitigation until A1's verified recovery gate has passed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["inputs", "context"],
+  "properties": {
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "template-ref", "image", "dockerfile", "context", "target", "base-image", "base-digest", "base-repo", "base-signer-workflow", "base-signer-digest", "builder-image", "builder-digest", "test-hook", "expected-entrypoint", "current-signer-digest", "promote-stable", "force", "bootstrap", "timeout-minutes", "recover-digest", "recover-signer-digest"],
+      "properties": {
+        "mode": {"enum": ["build", "promote-only"], "default": "build"},
+        "template-ref": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Required always; must equal OIDC job_workflow_sha."},
+        "image": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+        "dockerfile": {"type": "string", "default": "containers/Dockerfile", "pattern": "^(|(?!(?:/|.*(?:^|/)\\.\\.(?:/|$))).+)$"},
+        "context": {"type": "string", "default": ".", "pattern": "^(|(?!(?:/|.*(?:^|/)\\.\\.(?:/|$))).+)$"},
+        "target": {"type": "string", "default": "", "pattern": "^[A-Za-z0-9_.-]*$"},
+        "base-image": {"type": "string", "default": "", "pattern": "^(|ghcr\\.io/[a-z0-9-]+/[a-z0-9._-]+)$"},
+        "base-digest": {"type": "string", "default": "", "pattern": "^(|sha256:[0-9a-f]{64})$"},
+        "base-repo": {"type": "string", "default": "", "pattern": "^(|[A-Za-z0-9-]+/[A-Za-z0-9._-]+)$"},
+        "base-signer-workflow": {"type": "string", "default": "", "pattern": "^(|[A-Za-z0-9-]+/[A-Za-z0-9._-]+/\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml)$"},
+        "base-signer-digest": {"type": "string", "default": "", "pattern": "^(|[0-9a-f]{40})$"},
+        "builder-image": {"type": "string", "default": "", "pattern": "^(|[a-z0-9.-]+(/[a-z0-9._-]+)+)$"},
+        "builder-digest": {"type": "string", "default": "", "pattern": "^(|sha256:[0-9a-f]{64})$"},
+        "test-hook": {"type": "string", "default": "", "pattern": "^(|(?!(?:/|.*(?:^|/)\\.\\.(?:/|$))).+)$"},
+        "expected-entrypoint": {"type": "string", "default": "", "pattern": "^(|(/[^/\\u0000]+)+)$"},
+        "current-signer-digest": {"type": "string", "default": "", "pattern": "^(|[0-9a-f]{40})$", "description": "Empty means template-ref."},
+        "promote-stable": {"type": "boolean", "default": false},
+        "force": {"type": "boolean", "default": false},
+        "bootstrap": {"type": "boolean", "default": false, "description": "Source of the decision tool BOOTSTRAP environment value."},
+        "timeout-minutes": {"type": "number", "default": 45, "minimum": 10, "maximum": 120, "multipleOf": 1},
+        "recover-digest": {"type": "string", "default": "", "pattern": "^(|sha256:[0-9a-f]{64})$"},
+        "recover-signer-digest": {"type": "string", "default": "", "pattern": "^(|[0-9a-f]{40})$"}
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "ref", "event_name"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$"},
+        "ref": {"type": "string", "minLength": 1},
+        "event_name": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"inputs": {"properties": {"mode": {"const": "promote-only"}}}}},
+      "then": {
+        "properties": {
+          "inputs": {
+            "properties": {
+              "dockerfile": {"const": ""},
+              "context": {"const": ""},
+              "target": {"const": ""},
+              "base-image": {"const": ""},
+              "base-digest": {"const": ""},
+              "base-repo": {"const": ""},
+              "base-signer-workflow": {"const": ""},
+              "base-signer-digest": {"const": ""},
+              "builder-image": {"const": ""},
+              "builder-digest": {"const": ""},
+              "test-hook": {"const": ""},
+              "expected-entrypoint": {"const": ""},
+              "current-signer-digest": {"const": ""},
+              "recover-digest": {"pattern": "^sha256:[0-9a-f]{64}$"},
+              "recover-signer-digest": {"pattern": "^[0-9a-f]{40}$"},
+              "force": {"const": false},
+              "bootstrap": {"const": false}
+            }
+          }
+        }
+      },
+      "else": {
+        "if": {"properties": {"context": {"properties": {"repository": {"const": "NWarila/ubi9-base-micro"}}}}},
+        "then": {
+          "properties": {
+            "context": {
+              "properties": {
+                "ref": {"enum": ["refs/heads/main"]},
+                "event_name": {"enum": ["push", "schedule", "workflow_dispatch"]}
+              }
+            },
+            "inputs": {
+              "properties": {
+                "dockerfile": {"minLength": 1},
+                "context": {"minLength": 1},
+                "target": {"const": "runtime"},
+                "base-image": {"const": ""},
+                "base-digest": {"const": ""},
+                "base-repo": {"const": ""},
+                "base-signer-workflow": {"const": ""},
+                "base-signer-digest": {"const": ""},
+                "builder-image": {"const": ""},
+                "builder-digest": {"const": ""},
+                "recover-digest": {"const": ""},
+                "recover-signer-digest": {"const": ""}
+              }
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "inputs": {
+              "properties": {
+                "dockerfile": {"minLength": 1},
+                "context": {"minLength": 1},
+                "base-image": {"pattern": "^ghcr\\.io/[a-z0-9-]+/[a-z0-9._-]+$"},
+                "base-digest": {"pattern": "^sha256:[0-9a-f]{64}$"},
+                "base-repo": {"pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$"},
+                "base-signer-workflow": {"pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+/\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$"},
+                "base-signer-digest": {"pattern": "^[0-9a-f]{40}$"},
+                "expected-entrypoint": {"pattern": "^(/[^/\\u0000]+)+$"},
+                "recover-digest": {"const": ""},
+                "recover-signer-digest": {"const": ""},
+                "builder-image": {},
+                "builder-digest": {}
+              },
+              "oneOf": [
+                {"properties": {"builder-image": {"const": ""}, "builder-digest": {"const": ""}}},
+                {"properties": {"builder-image": {"const": "registry.access.redhat.com/ubi9/ubi-minimal"}, "builder-digest": {"const": "sha256:463cae32c6f6f5594b11a5c22de275016bd8545ce58a6373388e8b24f13fc15c"}}}
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

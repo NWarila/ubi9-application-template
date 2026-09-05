@@ -1,0 +1,18 @@
+#!/usr/bin/bash -p
+set -euo pipefail
+
+policy=${!#}
+[[ "$policy" == /proc/*/fd/* ]]
+printf '%s\n' "$policy" >> "${JQ_SNAPSHOT_LOG:?required}"
+before=$(/usr/bin/sha256sum < "$policy")
+before=${before%% *}
+if [[ ! -e "${JQ_SNAPSHOT_MARKER:?required}" ]]; then
+  /usr/bin/mv -f -- "${JQ_SNAPSHOT_REPLACEMENT:?required}" "${JQ_SNAPSHOT_TARGET:?required}"
+  : > "$JQ_SNAPSHOT_MARKER"
+fi
+captured=$(/usr/bin/sha256sum < "$policy")
+captured=${captured%% *}
+pathname=$(/usr/bin/sha256sum -- "$JQ_SNAPSHOT_TARGET")
+pathname=${pathname%% *}
+[[ "$captured" == "$before" && "$pathname" != "$before" ]]
+exec /usr/bin/jq "$@"

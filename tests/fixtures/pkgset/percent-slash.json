@@ -1,0 +1,1 @@
+{"documentDescribes":["SPDXRef-amd64-root"],"packages":[{"SPDXID":"SPDXRef-amd64-root","comment":"TMPL01A child manifest digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa platform=linux/amd64"},{"SPDXID":"SPDXRef-amd64-pkg","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:rpm/redhat/zlib%2Fevil@1"}]}]}
