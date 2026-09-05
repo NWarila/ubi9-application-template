@@ -5,8 +5,15 @@ if [[ $# -ne 1 ]]; then
   echo "usage: mutations.sh EXECUTABLE_TOOL_DIR" >&2
   exit 6
 fi
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-output=$(bash "$root_dir/tests/contracts.sh" "$1")
+source_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tool_dir=$(cd "$1" && pwd -P)
+scratch=$(mktemp -d "$tool_dir/tmpl01a-mutations.XXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+installed_root="$scratch/installed"
+status_file="$scratch/observed-statuses"
+ids_file="$scratch/mutation-ids"
+: > "$status_file"
+: > "$ids_file"
 rows=(
   'manifest-corrupt|1'
   'index-swapped|1'
@@ -20,6 +27,8 @@ rows=(
   'promote-mismatch|4'
   'verify-fail-4|1'
   'signer-unknown-old|6'
+  'signer-candidate-wrong-workflow|6'
+  'promote-candidate-wrong-workflow|6'
   'promote-probe-digest-error|2'
   'dockerfile-external-copy|1'
   'dockerfile-external-run-mount|1'
@@ -84,10 +93,29 @@ rows=(
   'trust-mode-group-parent|1'
   'trust-mode-world-runtime|6'
 )
-[[ "${output##*$'\n'}" == 'TOTAL 203/203' ]]
+for row in "${rows[@]}"; do
+  printf '%s\n' "${row%%|*}" >> "$ids_file"
+done
+bash "$source_root/tools/install-trust-tree.sh" "$source_root" "$installed_root"
+output=$(TMPL01A_META_INNER=1 \
+  TMPL01A_OBSERVED_STATUS_FILE="$status_file" \
+  TMPL01A_OBSERVED_IDS_FILE="$ids_file" \
+  bash "$installed_root/tests/contracts.sh" "$tool_dir")
+[[ "${output##*$'\n'}" == 'TOTAL 207/207' ]]
+[[ "$(wc -l < "$status_file")" -eq "${#rows[@]}" ]]
 for row in "${rows[@]}"; do
   fixture=${row%%|*}
-  exit_code=${row#*|}
+  expected=${row#*|}
   [[ "$(grep -Fxc "PASS $fixture" <<<"$output")" -eq 1 ]]
-  printf 'MUTATION\t%s\t%s\n' "$fixture" "$exit_code"
+  count=$(awk -F '|' -v id="$fixture" '$1 == id {count++} END {print count + 0}' "$status_file")
+  if [[ "$count" -ne 1 ]]; then
+    printf 'mutation %s: expected one observed status, got %s\n' "$fixture" "$count" >&2
+    exit 1
+  fi
+  observed=$(awk -F '|' -v id="$fixture" '$1 == id {print $2}' "$status_file")
+  if [[ "$observed" != "$expected" ]]; then
+    printf 'mutation %s: expected %s, observed %s\n' "$fixture" "$expected" "$observed" >&2
+    exit 1
+  fi
+  printf 'MUTATION\t%s\t%s\n' "$fixture" "$observed"
 done

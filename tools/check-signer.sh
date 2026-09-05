@@ -110,6 +110,7 @@ readonly TRUST_POLICY
     ((.value.active | unique | length) == (.value.active | length))
   ] | all) and
   ([.workflows[].active[]] | index($t) == null) and
+  (.workflows | has($w)) and
   (
     ($r == "candidate" and $d == $t) or
     (($r == "current" or $r == "recovery") and

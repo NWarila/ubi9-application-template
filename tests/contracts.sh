@@ -13,8 +13,9 @@ if [[ $# -gt 1 ]]; then exit 6; fi
 source_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tool_dir=${1:-/tmp/tmpl01a-tools}
 mkdir -p -- "$tool_dir" || exit 6
+tool_dir=$(cd "$tool_dir" && pwd -P) || exit 6
 root_dir=$(mktemp -d "$tool_dir/tmpl01a-tree.XXXXXX") || exit 6
-cp -a "$source_root/." "$root_dir/" || exit 6
+bash "$source_root/tools/install-trust-tree.sh" "$source_root" "$root_dir" || exit 6
 fixture_dir="$root_dir/tests/fixtures"
 work_dir=$(mktemp -d "$tool_dir/tmpl01a-contracts.XXXXXX") || exit 6
 registry_pid=
@@ -34,6 +35,8 @@ check() {
   local id=$1
   shift
   total=$((total + 1))
+  TMPL01A_CURRENT_FIXTURE=$id
+  export TMPL01A_CURRENT_FIXTURE
   if ("$@") >"$work_dir/${id}.stdout" 2>"$work_dir/${id}.stderr"; then
     printf 'PASS %s\n' "$id"
     pass=$((pass + 1))
@@ -43,11 +46,30 @@ check() {
   fi
 }
 
-expect_exit() {
-  local expected=$1
-  shift
+record_observed_status() {
+  local status=$1
+  [[ -n "${TMPL01A_OBSERVED_STATUS_FILE:-}" ]] || return 0
+  if [[ -n "${TMPL01A_OBSERVED_IDS_FILE:-}" ]] &&
+      ! grep -Fqx -- "${TMPL01A_CURRENT_FIXTURE:?}" "$TMPL01A_OBSERVED_IDS_FILE"; then
+    return 0
+  fi
+  printf '%s|%s\n' "${TMPL01A_CURRENT_FIXTURE:?}" "$status" >> "$TMPL01A_OBSERVED_STATUS_FILE"
+}
+
+run_observed() {
+  local status
   "$@"
-  [[ $? -eq "$expected" ]]
+  status=$?
+  record_observed_status "$status"
+  return "$status"
+}
+
+expect_exit() {
+  local expected=$1 status
+  shift
+  run_observed "$@"
+  status=$?
+  [[ "$status" -eq "$expected" ]]
 }
 
 fixture_pinned_tools() {
@@ -122,9 +144,10 @@ PY
 }
 
 fixture_schema_reject() {
-  local name=$1
-  python3 "$root_dir/tools/validate-envelope.py" "$fixture_dir/envelopes/$name.json" >/dev/null 2>&1
-  [[ $? -eq 1 ]] || return 1
+  local name=$1 status
+  run_observed python3 "$root_dir/tools/validate-envelope.py" "$fixture_dir/envelopes/$name.json" >/dev/null 2>&1
+  status=$?
+  [[ "$status" -eq 1 ]] || return 1
   python3 - "$root_dir/contracts/publish-inputs.schema.json" "$fixture_dir/envelopes/$name.json" <<'PY'
 import json
 import sys
@@ -214,13 +237,14 @@ fixture_manifest_push() {
 }
 
 fixture_manifest_corrupt() {
+  local status
   cp "$work_dir/index.json" "$work_dir/index-corrupt.json"
   printf X | dd of="$work_dir/index-corrupt.json" bs=1 seek=20 conv=notrunc status=none
-  if REGISTRY_INSECURE=1 "$root_dir/tools/manifest-push.sh" localhost:5000/tmpl01a-fixture \
+  REGISTRY_INSECURE=1 run_observed "$root_dir/tools/manifest-push.sh" localhost:5000/tmpl01a-fixture \
     sha256:240503f853cc81f3a30a7a6661a6effe236b9145bcccbafe76242b15e9cdbe0b \
-    "$work_dir/index-corrupt.json" application/vnd.oci.image.index.v1+json; then
-    return 1
-  fi
+    "$work_dir/index-corrupt.json" application/vnd.oci.image.index.v1+json
+  status=$?
+  [[ "$status" -eq 1 ]]
 }
 
 fixture_spdx_regenerate() {
@@ -306,11 +330,13 @@ fixture_pkgset_handcrafted() {
 }
 
 fixture_pkgset_fail() {
-  local name=$1 dir="$work_dir/pkgset-$1"
+  local name=$1 dir="$work_dir/pkgset-$1" status
   mkdir "$dir"
   printf 'preserve\n' > "$dir/pkgset-amd64.txt"
   (cd "$dir" && "$root_dir/tools/pkgset.sh" "$fixture_dir/pkgset/$name.json" amd64 >/dev/null 2>&1)
-  [[ $? -eq 1 && "$(cat "$dir/pkgset-amd64.txt")" == preserve ]]
+  status=$?
+  record_observed_status "$status"
+  [[ "$status" -eq 1 && "$(cat "$dir/pkgset-amd64.txt")" == preserve ]]
 }
 
 dockerfile_run() {
@@ -329,11 +355,12 @@ fixture_docker_root_pass() {
 }
 
 fixture_docker_fail() {
-  local name=$1 mode=${2:-root} expected=${3:-1}
+  local name=$1 mode=${2:-root} expected=${3:-1} status
   args=(--dockerfile "$fixture_dir/dockerfiles/$name.Dockerfile" --mode "$mode")
   if [[ "$mode" == root ]]; then args+=(--target runtime); fi
-  dockerfile_run "${args[@]}" >/dev/null 2>&1
-  [[ $? -eq "$expected" ]]
+  run_observed dockerfile_run "${args[@]}" >/dev/null 2>&1
+  status=$?
+  [[ "$status" -eq "$expected" ]]
 }
 
 fixture_docker_normal_pass() {
@@ -352,9 +379,11 @@ fixture_docker_no_target() {
 }
 
 fixture_docker_policy_override() {
-  dockerfile_run --dockerfile "$fixture_dir/dockerfiles/conforming-root.Dockerfile" --mode root --target runtime \
+  local status
+  run_observed dockerfile_run --dockerfile "$fixture_dir/dockerfiles/conforming-root.Dockerfile" --mode root --target runtime \
     --root-base "$work_dir/attacker-root.json" --builders "$work_dir/attacker-builders.json" >/dev/null 2>&1
-  [[ $? -eq 2 ]]
+  status=$?
+  [[ "$status" -eq 2 ]]
 }
 
 fixture_docker_policy_mismatch() {
@@ -382,10 +411,11 @@ fixture_materials_pass() {
 }
 
 fixture_materials_fail() {
-  local name=$1 output
-  output=$("$root_dir/tools/verify-build-materials.sh" \
+  local name=$1 output status
+  output=$(run_observed "$root_dir/tools/verify-build-materials.sh" \
     --provenance "$fixture_dir/provenance/$name.json" --mode root)
-  [[ $? -eq 1 && -z "$output" ]]
+  status=$?
+  [[ "$status" -eq 1 && -z "$output" ]]
 }
 
 fixture_registry_status() {
@@ -396,10 +426,11 @@ fixture_registry_status() {
 }
 
 fixture_registry_200_reject() {
-  local scenario=$1 output
-  output=$(REGISTRY_INSECURE=1 BOOTSTRAP=false "$root_dir/tools/registry-status.sh" \
+  local scenario=$1 output status
+  output=$(REGISTRY_INSECURE=1 BOOTSTRAP=false run_observed "$root_dir/tools/registry-status.sh" \
     "127.0.0.1:5001/$scenario" latest)
-  [[ $? -eq 2 && -z "$output" ]]
+  status=$?
+  [[ "$status" -eq 2 && -z "$output" ]]
 }
 
 verified_promote() {
@@ -419,14 +450,15 @@ make_gh_only() {
 }
 
 fixture_registry_reject() {
-  local scenario=$1 state="$work_dir/probe-$1.state" spy="$work_dir/probe-$1.spy"
+  local scenario=$1 state="$work_dir/probe-$1.state" spy="$work_dir/probe-$1.spy" status
   printf '0\n' > "$state"
   : > "$spy"
   PATH="$fixture_dir/bin:$tool_dir:$PATH" GH_STUB_MODE=success GH_STUB_STATE="$state" \
     REGISTRY_INSECURE=1 BOOTSTRAP=false CRANE_STUB_TAG_SPY="$spy" \
     CRANE_STUB_DIGEST=sha256:240503f853cc81f3a30a7a6661a6effe236b9145bcccbafe76242b15e9cdbe0b \
-    PROMOTION_IMAGE="127.0.0.1:5001/$scenario" PROMOTION_RUN_ID=1 verified_promote >/dev/null
-  [[ $? -eq 2 && ! -s "$spy" && "$(cat "$state")" -eq 4 ]]
+    PROMOTION_IMAGE="127.0.0.1:5001/$scenario" PROMOTION_RUN_ID=1 run_observed verified_promote >/dev/null
+  status=$?
+  [[ "$status" -eq 2 && ! -s "$spy" && "$(cat "$state")" -eq 4 ]]
 }
 
 fixture_registry_transport() {
@@ -447,7 +479,7 @@ fixture_registry_missing_auth() {
 }
 
 fixture_promote_nonnumeric_run_id() {
-  local state="$work_dir/nonnumeric-run.state" spy="$work_dir/nonnumeric-run.spy"
+  local state="$work_dir/nonnumeric-run.state" spy="$work_dir/nonnumeric-run.spy" status
   printf '0\n' > "$state"
   : > "$spy"
   PATH="$fixture_dir/bin:$tool_dir:$PATH" GH_STUB_MODE=success GH_STUB_STATE="$state" \
@@ -459,8 +491,9 @@ fixture_promote_nonnumeric_run_id() {
     SIGNER_DIGEST=1111111111111111111111111111111111111111 \
     TEMPLATE_REF=1111111111111111111111111111111111111111 SIGNER_ROLE=candidate \
     RUN_ID=not-a-number RUN_ATTEMPT=1 PUBLISH_DATE=20260905 PROMOTE_STABLE=false DECISION=publish \
-    "$root_dir/tools/verify-and-promote.sh" >/dev/null
-  [[ $? -eq 6 && ! -s "$spy" && "$(cat "$state")" -eq 4 ]]
+    run_observed "$root_dir/tools/verify-and-promote.sh" >/dev/null
+  status=$?
+  [[ "$status" -eq 6 && ! -s "$spy" && "$(cat "$state")" -eq 4 ]]
 }
 
 fixture_promotion_removed() {
@@ -468,21 +501,23 @@ fixture_promotion_removed() {
 }
 
 fixture_promotion_direct_rejected() {
-  local spy="$work_dir/direct-promote.spy"
+  local spy="$work_dir/direct-promote.spy" status
   : > "$spy"
-  CRANE_STUB_TAG_SPY="$spy" "$root_dir/tools/promote.sh" example.invalid/repo \
+  CRANE_STUB_TAG_SPY="$spy" run_observed "$root_dir/tools/promote.sh" example.invalid/repo \
     sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa latest mutable >/dev/null 2>&1
-  [[ $? -eq 127 && ! -s "$spy" ]]
+  status=$?
+  [[ "$status" -eq 127 && ! -s "$spy" ]]
 }
 
 fixture_promote_digest_probe_error() {
-  local state="$work_dir/probe-digest.state" spy="$work_dir/probe-digest.spy"
+  local state="$work_dir/probe-digest.state" spy="$work_dir/probe-digest.spy" status
   printf '0\n' > "$state"
   : > "$spy"
   PATH="$fixture_dir/bin:$tool_dir:$PATH" GH_STUB_MODE=success GH_STUB_STATE="$state" \
     REGISTRY_INSECURE=1 BOOTSTRAP=false CRANE_STUB_TAG_SPY="$spy" CRANE_STUB_DIGEST_FAIL=1 \
-    PROMOTION_IMAGE=127.0.0.1:5001/exists PROMOTION_RUN_ID=1 verified_promote >/dev/null
-  [[ $? -eq 2 && ! -s "$spy" ]]
+    PROMOTION_IMAGE=127.0.0.1:5001/exists PROMOTION_RUN_ID=1 run_observed verified_promote >/dev/null
+  status=$?
+  [[ "$status" -eq 2 && ! -s "$spy" ]]
 }
 
 fixture_promote_absent() {
@@ -532,7 +567,7 @@ fixture_promote_mismatch() {
   PATH="$fixture_dir/bin:$tool_dir:$PATH" GH_STUB_MODE=success GH_STUB_STATE="$state" \
     REGISTRY_INSECURE=1 BOOTSTRAP=false CRANE_STUB_TAG_SPY="$spy" \
     CRANE_STUB_DIGEST=sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f \
-    PROMOTION_IMAGE=127.0.0.1:5001/manifest-unknown PROMOTION_RUN_ID=7 verified_promote >/dev/null
+    PROMOTION_IMAGE=127.0.0.1:5001/manifest-unknown PROMOTION_RUN_ID=7 run_observed verified_promote >/dev/null
   rc=$?
   [[ "$rc" -eq 4 && -s "$spy" ]]
 }
@@ -556,7 +591,7 @@ fixture_verify() {
 }
 
 fixture_verify_fail_position() {
-  local position=$1 state="$work_dir/fail-$1.state" spy="$work_dir/fail-$1.spy"
+  local position=$1 state="$work_dir/fail-$1.state" spy="$work_dir/fail-$1.spy" rc
   printf '0\n' > "$state"
   : > "$spy"
   PATH="$fixture_dir/bin:$tool_dir:$PATH" GH_STUB_MODE="fail-$position" GH_STUB_STATE="$state" \
@@ -565,13 +600,14 @@ fixture_verify_fail_position() {
     CALLER_REPO=NWarila/example SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
     SIGNER_DIGEST=1111111111111111111111111111111111111111 TEMPLATE_REF=1111111111111111111111111111111111111111 \
     SIGNER_ROLE=candidate RUN_ID=1 RUN_ATTEMPT=1 PUBLISH_DATE=20260905 PROMOTE_STABLE=false DECISION=publish \
-    "$root_dir/tools/verify-and-promote.sh" >/dev/null
-  [[ $? -ne 0 && ! -s "$spy" ]]
+    run_observed "$root_dir/tools/verify-and-promote.sh" >/dev/null
+  rc=$?
+  [[ "$rc" -ne 0 && ! -s "$spy" ]]
 }
 
 fixture_signer() {
   local role=$1 digest=$2 policy=$3 expected=$4 workflow=${5:-NWarila/ubi9-application-template/.github/workflows/publish.yaml}
-  local policy_tree="$work_dir/signer-${role}-${digest}-${policy}" policy_sha
+  local policy_tree="$work_dir/signer-${role}-${digest}-${policy}" policy_sha status
   install -d -m 0755 "$policy_tree" "$policy_tree/contracts"
   cp -a "$root_dir/tools" "$policy_tree/"
   install -m 0644 "$fixture_dir/$policy" "$policy_tree/contracts/signers.json"
@@ -579,16 +615,19 @@ fixture_signer() {
   sed -i -E "s/^readonly SIGNERS_SHA256=.*/readonly SIGNERS_SHA256=$policy_sha/" \
     "$policy_tree/tools/check-signer.sh"
   SIGNER_ROLE="$role" SIGNER_DIGEST="$digest" TEMPLATE_REF=1111111111111111111111111111111111111111 \
-    SIGNER_WORKFLOW="$workflow" "$policy_tree/tools/check-signer.sh"
-  [[ $? -eq "$expected" ]]
+    SIGNER_WORKFLOW="$workflow" run_observed "$policy_tree/tools/check-signer.sh"
+  status=$?
+  [[ "$status" -eq "$expected" ]]
 }
 
 fixture_signer_env_override() {
+  local status
   SIGNER_ROLE=recovery SIGNER_DIGEST=2222222222222222222222222222222222222222 \
     TEMPLATE_REF=1111111111111111111111111111111111111111 \
     SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
-    SIGNERS_FILE="$fixture_dir/signers-allowed.json" "$root_dir/tools/check-signer.sh"
-  [[ $? -eq 6 ]]
+    SIGNERS_FILE="$fixture_dir/signers-allowed.json" run_observed "$root_dir/tools/check-signer.sh"
+  status=$?
+  [[ "$status" -eq 6 ]]
 }
 
 fixture_signer_premutation() {
@@ -613,7 +652,7 @@ fixture_signer_bad_env() {
 
 fixture_signer_symlink_escape() {
   local policy_tree="$work_dir/signer-symlink-tree"
-  local outside="$work_dir/outside-signers.json" spy="$work_dir/symlink-jq.spy"
+  local outside="$work_dir/outside-signers.json" spy="$work_dir/symlink-jq.spy" status
   install -d -m 0755 "$policy_tree" "$policy_tree/contracts"
   cp -a "$root_dir/tools" "$policy_tree/"
   cp "$fixture_dir/signers-allowed-out-of-tree.json" "$outside"
@@ -623,8 +662,27 @@ fixture_signer_symlink_escape() {
     SIGNER_ROLE=current SIGNER_DIGEST=2222222222222222222222222222222222222222 \
     TEMPLATE_REF=1111111111111111111111111111111111111111 \
     SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
-    "$policy_tree/tools/check-signer.sh"
-  [[ $? -eq 6 && ! -s "$spy" ]]
+    run_observed "$policy_tree/tools/check-signer.sh"
+  status=$?
+  [[ "$status" -eq 6 && ! -s "$spy" ]]
+}
+
+fixture_promote_candidate_wrong_workflow() {
+  local rc state="$work_dir/candidate-wrong-workflow.state"
+  local gh_log="$work_dir/candidate-wrong-workflow.gh" tag_spy="$work_dir/candidate-wrong-workflow.tags"
+  printf '0\n' > "$state"
+  : > "$gh_log"
+  : > "$tag_spy"
+  GH_STUB_MODE=success GH_STUB_STATE="$state" GH_STUB_LOG="$gh_log" CRANE_STUB_TAG_SPY="$tag_spy" \
+    IMAGE=ghcr.io/nwarila/example \
+    INDEX_DIGEST=sha256:240503f853cc81f3a30a7a6661a6effe236b9145bcccbafe76242b15e9cdbe0b \
+    CALLER_REPO=NWarila/example SIGNER_WORKFLOW=Attacker/evil/.github/workflows/pwn.yml \
+    SIGNER_DIGEST=1111111111111111111111111111111111111111 \
+    TEMPLATE_REF=1111111111111111111111111111111111111111 SIGNER_ROLE=candidate \
+    RUN_ID=88 RUN_ATTEMPT=1 PUBLISH_DATE=20260905 PROMOTE_STABLE=false DECISION=publish \
+    run_observed "$root_dir/tools/verify-and-promote.sh" >/dev/null 2>&1
+  rc=$?
+  [[ "$rc" -eq 6 && "$(cat "$state")" -eq 0 && ! -s "$gh_log" && ! -s "$tag_spy" ]]
 }
 
 copy_trust_case() {
@@ -652,6 +710,7 @@ fixture_hostile_shell_runtime() {
   else
     rc=$?
   fi
+  record_observed_status "$rc"
   if [[ "$rc" -ne 6 || -s "$spy" || -s "$tag_spy" ]]; then
     printf 'hostile %s: rc=%s runtime-spy=%s tag-spy=%s\n' "$name" "$rc" \
       "$(wc -c < "$spy")" "$(wc -c < "$tag_spy")" >&2
@@ -669,7 +728,7 @@ fixture_hostile_python_runtime() {
   : > "$spy"
   : > "$tag_spy"
   PATH="$hostile:$PATH" HOSTILE_RUNTIME_SPY="$spy" CRANE_STUB_TAG_SPY="$tag_spy" \
-    "$case_root/tools/verify-build-materials.sh" \
+    run_observed "$case_root/tools/verify-build-materials.sh" \
       --provenance "$fixture_dir/provenance/extra-alpine.json" --mode root >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 1 && ! -s "$spy" && ! -s "$tag_spy" ]]
@@ -680,7 +739,7 @@ fixture_hostile_pythonpath() {
   : > "$spy"
   : > "$tag_spy"
   PYTHONPATH="$fixture_dir/pythonpath" HOSTILE_RUNTIME_SPY="$spy" CRANE_STUB_TAG_SPY="$tag_spy" \
-    "$root_dir/tools/verify-build-materials.sh" \
+    run_observed "$root_dir/tools/verify-build-materials.sh" \
       --provenance "$fixture_dir/provenance/extra-alpine.json" --mode root >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 1 && ! -s "$spy" && ! -s "$tag_spy" ]]
@@ -695,7 +754,7 @@ fixture_hardlink_check_signer() {
     SIGNER_DIGEST=2222222222222222222222222222222222222222 \
     TEMPLATE_REF=1111111111111111111111111111111111111111 \
     SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
-    "$outside" >/dev/null 2>&1
+    run_observed "$outside" >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 6 && ! -s "$spy" ]]
 }
@@ -710,7 +769,7 @@ fixture_hardlink_verify_attestations() {
     CALLER_REPO=NWarila/example \
     SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
     SIGNER_DIGEST=1111111111111111111111111111111111111111 \
-    "$outside" >/dev/null 2>&1
+    run_observed "$outside" >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 6 && ! -s "$spy" ]]
 }
@@ -727,7 +786,7 @@ fixture_hardlink_verify_and_promote() {
     SIGNER_DIGEST=1111111111111111111111111111111111111111 \
     TEMPLATE_REF=1111111111111111111111111111111111111111 SIGNER_ROLE=candidate \
     RUN_ID=1 RUN_ATTEMPT=1 PUBLISH_DATE=20260905 PROMOTE_STABLE=false DECISION=publish \
-    "$outside" >/dev/null 2>&1
+    run_observed "$outside" >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 6 && ! -s "$spy" ]]
 }
@@ -737,7 +796,7 @@ fixture_hardlink_materials_tool() {
   copy_trust_case hardlink-materials-tool
   ln "$case_root/tools/verify-build-materials.py" "$outside"
   : > "$spy"
-  CRANE_STUB_TAG_SPY="$spy" "$case_root/tools/.tmpl01a-runtime/python3" -I "$outside" \
+  CRANE_STUB_TAG_SPY="$spy" run_observed "$case_root/tools/.tmpl01a-runtime/python3" -I "$outside" \
     --provenance "$fixture_dir/provenance/conforming-root.json" --mode root >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 1 && ! -s "$spy" ]]
@@ -754,7 +813,7 @@ fixture_hardlink_signers_policy() {
     SIGNER_DIGEST=2222222222222222222222222222222222222222 \
     TEMPLATE_REF=1111111111111111111111111111111111111111 \
     SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
-    "$case_root/tools/check-signer.sh" >/dev/null 2>&1
+    run_observed "$case_root/tools/check-signer.sh" >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 6 && ! -s "$spy" ]]
 }
@@ -766,7 +825,7 @@ fixture_hardlink_root_base_policy() {
   rm "$case_root/contracts/root-base.json"
   ln "$outside" "$case_root/contracts/root-base.json"
   : > "$spy"
-  CRANE_STUB_TAG_SPY="$spy" "$case_root/tools/verify-build-materials.sh" \
+  CRANE_STUB_TAG_SPY="$spy" run_observed "$case_root/tools/verify-build-materials.sh" \
     --provenance "$fixture_dir/provenance/conforming-root-mirror.json" --mode root >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 1 && ! -s "$spy" ]]
@@ -779,7 +838,7 @@ fixture_hardlink_builders_policy() {
   rm "$case_root/contracts/builders.json"
   ln "$outside" "$case_root/contracts/builders.json"
   : > "$spy"
-  CRANE_STUB_TAG_SPY="$spy" "$case_root/tools/verify-build-materials.sh" \
+  CRANE_STUB_TAG_SPY="$spy" run_observed "$case_root/tools/verify-build-materials.sh" \
     --provenance "$fixture_dir/provenance/conforming-normal.json" --mode normal \
     --base-image ghcr.io/nwarila/base \
     --base-digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null 2>&1
@@ -819,7 +878,7 @@ fixture_open_once_runtime_swap() {
     IMAGE=ghcr.io/nwarila/example CALLER_REPO=NWarila/example \
     SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
     SIGNER_DIGEST=1111111111111111111111111111111111111111 \
-    "$case_root/tools/verify-attestations.sh" >/dev/null 2>&1
+    run_observed "$case_root/tools/verify-attestations.sh" >/dev/null 2>&1
   rc=$?
   if [[ "$rc" -ne 0 || "$(cat "$state")" -ne 4 || "$(wc -l < "$log")" -ne 4 ]]; then
     printf 'open-once runtime: rc=%s calls=%s log=%s fd-log=%s hostile=%s\n' "$rc" \
@@ -854,7 +913,7 @@ fixture_signer_single_snapshot() {
     SIGNER_DIGEST=2222222222222222222222222222222222222222 \
     TEMPLATE_REF=1111111111111111111111111111111111111111 \
     SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
-    "$policy_tree/tools/check-signer.sh" >/dev/null 2>&1
+    run_observed "$policy_tree/tools/check-signer.sh" >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 0 && "$(wc -l < "$log")" -eq 1 && -e "$marker" && ! -e "$replacement" ]] || return 1
   [[ "$(cat "$log")" == /proc/*/fd/* && ! -s "$spy" ]]
@@ -869,7 +928,7 @@ fixture_group_writable_trust_file() {
     SIGNER_DIGEST=1111111111111111111111111111111111111111 \
     TEMPLATE_REF=1111111111111111111111111111111111111111 \
     SIGNER_WORKFLOW=NWarila/ubi9-application-template/.github/workflows/publish.yaml \
-    "$case_root/tools/check-signer.sh" >/dev/null 2>&1
+    run_observed "$case_root/tools/check-signer.sh" >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 6 && ! -s "$spy" ]]
 }
@@ -879,7 +938,7 @@ fixture_group_writable_parent_dir() {
   copy_trust_case group-writable-parent
   chmod 0775 "$case_root/contracts"
   : > "$spy"
-  CRANE_STUB_TAG_SPY="$spy" "$case_root/tools/verify-build-materials.sh" \
+  CRANE_STUB_TAG_SPY="$spy" run_observed "$case_root/tools/verify-build-materials.sh" \
     --provenance "$fixture_dir/provenance/conforming-root.json" --mode root >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 1 && ! -s "$spy" ]]
@@ -891,7 +950,7 @@ fixture_world_writable_runtime_dir() {
   chmod 0777 "$case_root/tools/.tmpl01a-runtime"
   : > "$spy"
   CRANE_STUB_TAG_SPY="$spy" PROMOTION_IMAGE=ghcr.io/nwarila/example \
-    verified_promote "$case_root" >/dev/null 2>&1
+    run_observed verified_promote "$case_root" >/dev/null 2>&1
   rc=$?
   [[ "$rc" -eq 6 && ! -s "$spy" ]]
 }
@@ -1023,6 +1082,34 @@ fixture_fault_hook() {
   [[ $? -eq 1 && "$output" == 'TMPL01A Gate 1 forced fault' ]]
 }
 
+fixture_install_trust_tree_modes() {
+  local path
+  for path in \
+    "$root_dir/tools/check-signer.sh" \
+    "$root_dir/tools/verify-attestations.sh" \
+    "$root_dir/tools/verify-and-promote.sh" \
+    "$root_dir/tools/verify-build-materials.sh"; do
+    [[ "$(stat -Lc '%a' "$path")" == 555 ]] || return 1
+  done
+  for path in "$root_dir"/contracts/* "$root_dir/tools/verify-build-materials.py"; do
+    [[ "$(stat -Lc '%a' "$path")" == 644 ]] || return 1
+  done
+  [[ "$(stat -Lc '%a' "$root_dir/tools/install-trust-tree.sh")" == 755 ]] || return 1
+  [[ -z "$(find "$root_dir" -xdev -perm /0022 -print -quit)" ]]
+}
+
+fixture_mutation_harness_meta() {
+  local meta_root="$work_dir/mutations-meta-tree" stdout="$work_dir/mutations-meta.stdout"
+  local stderr="$work_dir/mutations-meta.stderr"
+  if [[ "${TMPL01A_META_INNER:-0}" == 1 ]]; then return 0; fi
+  bash "$root_dir/tools/install-trust-tree.sh" "$root_dir" "$meta_root"
+  sed -i "s/'manifest-corrupt|1'/'manifest-corrupt|9'/" "$meta_root/tests/mutations.sh"
+  if TMPL01A_META_INNER=1 bash "$meta_root/tests/mutations.sh" "$tool_dir" >"$stdout" 2>"$stderr"; then
+    return 1
+  fi
+  grep -Fq 'mutation manifest-corrupt: expected 9, observed 1' "$stderr"
+}
+
 fixture_static_all() {
   bash -n "$root_dir"/tools/*.sh "$root_dir"/tests/*.sh "$fixture_dir"/bin/* "$fixture_dir"/signer-bin/* \
     "$fixture_dir"/hostile-bin/* "$fixture_dir"/trusted-runtime/*
@@ -1103,6 +1190,8 @@ check schema-root-extra-property fixture_schema_reject root-extra-property
 check schema-root-forbidden-each fixture_schema_root_forbidden_each
 check schema-downstream-warning fixture_schema_downstream
 check pins-network fixture_pin_network
+check install-trust-tree-modes fixture_install_trust_tree_modes
+check mutation-harness-meta fixture_mutation_harness_meta
 
 registry_data="$work_dir/registry-data"
 mkdir "$registry_data"
@@ -1265,6 +1354,8 @@ check verify-fail-2 fixture_verify_fail_position 2
 check verify-fail-3 fixture_verify_fail_position 3
 check verify-fail-4 fixture_verify_fail_position 4
 check signer-candidate fixture_signer candidate 1111111111111111111111111111111111111111 signers-revoked.json 0
+check signer-candidate-wrong-workflow fixture_signer candidate 1111111111111111111111111111111111111111 \
+  signers-allowed.json 6 Attacker/ubi9-application-template/.github/workflows/publish.yaml
 check signer-candidate-bad fixture_signer candidate 2222222222222222222222222222222222222222 signers-allowed.json 6
 check signer-allowed-old fixture_signer current 2222222222222222222222222222222222222222 signers-allowed.json 0
 check signer-unknown-old fixture_signer current 3333333333333333333333333333333333333333 signers-allowed.json 6
@@ -1281,6 +1372,7 @@ check signer-uppercase-digest fixture_signer current 111111111111111111111111111
 check signer-symlink-escape fixture_signer_symlink_escape
 check signer-before-mutation fixture_signer_premutation
 check signer-bad-env fixture_signer_bad_env
+check promote-candidate-wrong-workflow fixture_promote_candidate_wrong_workflow
 check recovery-success fixture_recovery_success
 
 check tags-match fixture_tags match

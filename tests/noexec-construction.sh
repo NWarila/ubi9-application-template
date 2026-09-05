@@ -15,12 +15,11 @@ case ",$(findmnt -T "$scratch" -no OPTIONS)," in
   *) echo "/tmp is not a noexec mount" >&2; exit 6 ;;
 esac
 copy="$scratch/tree"
-mkdir "$copy"
-cp -a "$source_tree/." "$copy/"
+bash "$source_tree/tools/install-trust-tree.sh" "$source_tree" "$copy"
 derived="$scratch/.tmpl01a-tools"
 [[ ! -e "$derived" ]]
 output=$(bash "$copy/tests/contracts.sh" "$install_dir")
 printf '%s\n' "$output"
 [[ "$output" != *'FAIL '* ]]
-[[ "${output##*$'\n'}" == 'TOTAL 203/203' ]]
+[[ "${output##*$'\n'}" == 'TOTAL 207/207' ]]
 [[ ! -e "$derived" ]]
